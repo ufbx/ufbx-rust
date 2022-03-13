@@ -7,6 +7,10 @@ description = "Bindings for ufbx"
 license = "MIT OR PDDL-1.0"
 homepage = "https://github.com/ufbx/ufbx-rust"
 repository = "https://github.com/ufbx/ufbx-rust"
+include = [
+    "src/*",
+    "ufbx/*",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
