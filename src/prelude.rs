@@ -1,6 +1,6 @@
 use std::{ptr, str, slice};
 use std::marker::PhantomData;
-use std::ops::{Deref};
+use std::ops::{Deref, Index};
 use std::alloc::{self,Layout,System,GlobalAlloc};
 use std::ffi::{c_void, CStr};
 use std::os::raw::c_char;
@@ -43,6 +43,13 @@ impl<'a, T> IntoIterator for &'a List<T> {
     }
 }
 
+impl<T> Index<usize> for List<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &T {
+        &self.as_ref()[index]
+    }
+}
+
 #[repr(C)]
 pub struct RefList<T> {
     data: *const Ref<T>,
@@ -63,11 +70,29 @@ impl<T> Deref for RefList<T> {
     }
 }
 
+pub struct RefIter<'a, T> {
+    inner: slice::Iter<'a, Ref<T>>,
+}
+
+impl<'a, T> Iterator for RefIter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|v| v.as_ref())
+    }
+}
+
 impl<'a, T> IntoIterator for &'a RefList<T> {
-    type Item = &'a Ref<T>;
-    type IntoIter = slice::Iter<'a, Ref<T>>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().into_iter()
+    type Item = &'a T;
+    type IntoIter = RefIter<'a, T>;
+    fn into_iter(self) -> RefIter<'a, T> {
+        RefIter::<'_, T> { inner: self.as_ref().into_iter() }
+    }
+}
+
+impl<T> Index<usize> for RefList<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &T {
+        &self.as_ref()[index]
     }
 }
 
@@ -75,6 +100,12 @@ impl<'a, T> IntoIterator for &'a RefList<T> {
 pub struct Ref<T> {
     ptr: NonNull<T>,
     _marker: PhantomData<T>,
+}
+
+impl<T> AsRef<T> for Ref<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { &*self.ptr.as_ptr() }
+    }
 }
 
 impl<T> Deref for Ref<T> {

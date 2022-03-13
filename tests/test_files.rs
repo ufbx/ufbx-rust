@@ -1,15 +1,20 @@
 use ufbx;
-use std::vec::Vec;
 
-/*
+fn type_name_of<T>(_: &T) -> &'static str {
+    std::any::type_name::<T>()
+}
+
 #[test]
 fn load_file() {
-    let result = ufbx::load_file_len("test.fbx", ufbx::LoadOpts::default());
+    let result = ufbx::load_file_len("target/model.fbx", ufbx::LoadOpts::default());
     let scene: ufbx::SceneRoot = result.expect("Expected to load scene");
-    assert!(scene.metadata.creator == "Blender (stable FBX IO) - 2.79 (sub 0) - 3.7.13");
+    println!("first: {}", type_name_of(&scene.nodes[0]));
+    for node in &scene.nodes {
+        println!("{}", type_name_of(node))
+    }
 }
-*/
 
+/*
 #[test]
 fn load_progress() {
     let mut opts = ufbx::LoadOpts::default();
@@ -28,7 +33,7 @@ fn load_progress() {
 
     // opts.progress_cb = ufbx::ProgressCb::Mut(&mut cb);
 
-    let file = std::fs::File::open("test.fbx").unwrap();
+    let file = std::fs::File::open("model.fbx").unwrap();
     let result = ufbx::load_stream(ufbx::Stream::File(file), opts);
     let scene: ufbx::SceneRoot = result.expect("Expected to load scene");
 
@@ -65,3 +70,4 @@ fn load_progress() {
 
     println!("{}", count);
 }
+*/
