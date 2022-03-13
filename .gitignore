@@ -1,0 +1,5 @@
+target/
+build/
+__pycache__/
+Cargo.lock
+ufbx_typed.json
