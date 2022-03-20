@@ -678,6 +678,7 @@ pod_structs = [
     "ufbx_keyframe",
     "ufbx_curve_point",
     "ufbx_surface_point",
+    "ufbx_topo_edge",
 ]
 
 input_structs = [
