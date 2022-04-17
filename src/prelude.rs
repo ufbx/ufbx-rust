@@ -2,7 +2,7 @@ use std::{ptr, str, slice};
 use std::marker::PhantomData;
 use std::ops::{Deref, Index};
 use std::alloc::{self,Layout,System,GlobalAlloc};
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void};
 use std::os::raw::c_char;
 use std::cmp::min;
 use std::io::{Read,Seek,SeekFrom};
@@ -499,17 +499,6 @@ impl Debug for Error {
 #[link(name="ufbx")]
 extern "C" {
     pub fn ufbxi_rust_pop_assert() -> *const c_char;
-}
-
-pub fn assert_to_panic() {
-    unsafe {
-        let pointer = ufbxi_rust_pop_assert();
-        if !pointer.is_null() {
-            let c_message = CStr::from_ptr(pointer);
-            let message = c_message.to_str().unwrap_or("(bad assert message)");
-            panic!("{}", message);
-        }
-    }
 }
 
 /*

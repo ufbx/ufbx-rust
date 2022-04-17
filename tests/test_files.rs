@@ -6,17 +6,26 @@ fn type_name_of<T>(_: &T) -> &'static str {
 
 #[test]
 fn load_file() {
-    let result = ufbx::load_file_len("target/model.fbx", ufbx::LoadOpts::default());
+    let result = ufbx::load_file_len("build/model.fbx", ufbx::LoadOpts::default());
     let scene: ufbx::SceneRoot = result.expect("Expected to load scene");
     println!("first: {}", type_name_of(&scene.nodes[0]));
     for node in &scene.nodes {
-        println!("{}", type_name_of(node))
+        println!("{}", type_name_of(node));
+        match &node.mesh {
+        Some(mesh) => {
+            let face = mesh.faces[0];
+            let mut indices = Vec::<u32>::new();
+            indices.resize(mesh.max_face_triangles * 3, 0);
+            ufbx::triangulate_face(&mut indices, mesh, face);
+        },
+        _ => (),
+        }
     }
 }
 
 /*
 #[test]
-fn load_progress() {
+fn load_progress() {K
     let mut opts = ufbx::LoadOpts::default();
 
     let mut count: usize = 0;

@@ -34,8 +34,9 @@
 
 #define ufbx_nullable
 
-// #define ufbx_abi __declspec(dllexport)
-#define ufbx_abi
+#ifndef ufbx_abi
+	#define ufbx_abi
+#endif
 
 // -- Configuration
 
@@ -43,6 +44,7 @@
 typedef double ufbx_real;
 
 #define UFBX_ERROR_STACK_MAX_DEPTH 8
+#define UFBX_PANIC_MESSAGE_LENGTH 128
 
 // -- Language
 
@@ -1513,8 +1515,8 @@ typedef enum ufbx_cache_data_format {
 	UFBX_CACHE_DATA_FORMAT_REAL_DOUBLE, // < `double data[]`
 	UFBX_CACHE_DATA_FORMAT_VEC3_DOUBLE, // < `struct { double x, y, z; } data[]`
 
-	UFBX_CACHE_DATA_COUNT,
-	UFBX_CACHE_DATA_FORCE_32BIT = 0x7fffffff,
+	UFBX_CACHE_DATA_FORMAT_COUNT,
+	UFBX_CACHE_DATA_FORMAT_FORCE_32BIT = 0x7fffffff,
 } ufbx_cache_data_format;
 
 typedef enum ufbx_cache_data_encoding {
@@ -2439,6 +2441,14 @@ typedef enum ufbx_coordinate_axis {
 	UFBX_COORDINATE_AXIS_FORCE_32BIT = 0x7fffffff,
 } ufbx_coordinate_axis;
 
+// Coordinate axes the scene is represented in.
+// NOTE: `front` is the _opposite_ from forward!
+typedef struct ufbx_coordinate_axes {
+	ufbx_coordinate_axis right;
+	ufbx_coordinate_axis up;
+	ufbx_coordinate_axis front;
+} ufbx_coordinate_axes;
+
 typedef enum ufbx_time_mode {
 	UFBX_TIME_MODE_DEFAULT,
 	UFBX_TIME_MODE_120_FPS,
@@ -2486,11 +2496,16 @@ typedef enum ufbx_snap_mode {
 typedef struct ufbx_scene_settings {
 	ufbx_props props;
 
-	ufbx_coordinate_axis axis_right;
-	ufbx_coordinate_axis axis_up;
-	ufbx_coordinate_axis axis_front;
+	// Mapping of X/Y/Z axes to world-space directions.
+	// HINT: Use `ufbx_load_opts.target_axes` to normalize this.
+	// NOTE: This contains the _original_ axes even if you supply `ufbx_load_opts.target_axes`.
+	ufbx_coordinate_axes axes;
 
-	ufbx_real unit_scale_factor;
+	// How many meters does a single world-space unit represent.
+	// FBX files usually default to centimeters, reported as `0.01` here.
+	// HINT: Use `ufbx_load_opts.target_unit_meters` to normalize this.
+	ufbx_real unit_meters;
+
 	double frames_per_second;
 
 	ufbx_vec3 ambient_color;
@@ -2502,7 +2517,7 @@ typedef struct ufbx_scene_settings {
 
 	// Original settings (?)
 	ufbx_coordinate_axis original_axis_up;
-	ufbx_real original_unit_scale_factor;
+	ufbx_real original_unit_meters;
 } ufbx_scene_settings;
 
 struct ufbx_scene {
@@ -2874,6 +2889,9 @@ typedef struct ufbx_load_opts {
 	// to split models into parts per material.
 	bool allow_null_material;
 
+	// Generate vertex normals for a meshes that are missing normals.
+	bool generate_missing_normals;
+
 	// Estimated file size for progress reporting
 	uint64_t file_size_estimate;
 
@@ -2890,6 +2908,20 @@ typedef struct ufbx_load_opts {
 
 	// External file callbacks (defaults to stdio.h)
 	ufbx_open_file_cb open_file_cb;
+
+	// Apply an implicit root transformation to match axes.
+	// Used if `ufbx_coordinate_axes_valid(target_axes)`.
+	ufbx_coordinate_axes target_axes;
+
+	// Scale the scene so that one world-space unit is `target_unit_meters` meters.
+	// By default units are not scaled.
+	ufbx_real target_unit_meters;
+
+	// Do not scale necessary properties curves with `target_unit_meters`.
+	bool no_prop_unit_scaling;
+
+	// Do not scale necessary animation curves with `target_unit_meters`.
+	bool no_anim_curve_unit_scaling;
 
 	// Override for the root transform
 	bool use_root_transform;
@@ -2993,6 +3025,12 @@ typedef struct ufbx_geometry_cache_data_opts {
 	uint32_t _end_zero;
 } ufbx_geometry_cache_data_opts;
 
+typedef struct ufbx_panic {
+	bool did_panic;
+	size_t message_length;
+	char message[UFBX_PANIC_MESSAGE_LENGTH];
+} ufbx_panic;
+
 // -- API
 
 #ifdef __cplusplus
@@ -3008,11 +3046,33 @@ extern const ufbx_vec3 ufbx_zero_vec3;
 extern const ufbx_vec4 ufbx_zero_vec4;
 extern const ufbx_quat ufbx_identity_quat;
 
+// Commonly used coordinate axes
+
+extern const ufbx_coordinate_axes ufbx_axes_right_handed_y_up;
+extern const ufbx_coordinate_axes ufbx_axes_right_handed_z_up;
+extern const ufbx_coordinate_axes ufbx_axes_left_handed_y_up;
+extern const ufbx_coordinate_axes ufbx_axes_left_handed_z_up;
+
 // Sizes of element types. eg `sizeof(ufbx_node)`
 extern const size_t ufbx_element_type_size[UFBX_ELEMENT_TYPE_COUNT];
 
 // Version of the source file, comparable to `UFBX_HEADER_VERSION`
 extern const uint32_t ufbx_source_version;
+
+// Practically always `true` (see below), if not you need to be careful with threads.
+//
+// Guaranteed to be `true` in _any_ of the following conditions:
+// - ufbx.c has been compiled using: GCC / Clang / MSVC / ICC / EMCC
+// - ufbx.c has been compiled as C++11 or later
+// - ufbx.c has been compiled as C11 or later with `<stdatomic.h>` support
+//
+// If `false` you can't call the following functions concurrently:
+//   ufbx_evaluate_scene()
+//   ufbx_free_scene()
+//   ufbx_subdivide_mesh()
+//   ufbx_tessellate_nurbs_surface()
+//   ufbx_free_mesh()
+ufbx_abi bool ufbx_is_thread_safe();
 
 // Load a scene from a `size` byte memory buffer at `data`
 ufbx_abi ufbx_scene *ufbx_load_memory(
@@ -3174,6 +3234,8 @@ ufbx_inline ufbx_string ufbx_find_shader_prop(const ufbx_shader *shader, const c
 
 // Math
 
+ufbx_abi bool ufbx_coordinate_axes_valid(ufbx_coordinate_axes axes);
+
 ufbx_abi ufbx_quat ufbx_quat_mul(ufbx_quat a, ufbx_quat b);
 ufbx_abi ufbx_quat ufbx_quat_normalize(ufbx_quat q);
 ufbx_abi ufbx_quat ufbx_quat_fix_antipodal(ufbx_quat q, ufbx_quat reference);
@@ -3183,6 +3245,7 @@ ufbx_abi ufbx_vec3 ufbx_quat_to_euler(ufbx_quat q, ufbx_rotation_order order);
 ufbx_abi ufbx_quat ufbx_euler_to_quat(ufbx_vec3 v, ufbx_rotation_order order);
 
 ufbx_abi ufbx_matrix ufbx_matrix_mul(const ufbx_matrix *a, const ufbx_matrix *b);
+ufbx_abi ufbx_real ufbx_matrix_determinant(const ufbx_matrix *m);
 ufbx_abi ufbx_matrix ufbx_matrix_invert(const ufbx_matrix *m);
 ufbx_abi ufbx_matrix ufbx_matrix_for_normals(const ufbx_matrix *m);
 ufbx_abi ufbx_vec3 ufbx_transform_position(const ufbx_matrix *m, ufbx_vec3 v);
@@ -3192,7 +3255,10 @@ ufbx_abi ufbx_transform ufbx_matrix_to_transform(const ufbx_matrix *m);
 
 // Skinning
 
-ufbx_abi ufbx_matrix ufbx_get_skin_vertex_matrix(const ufbx_skin_deformer *skin, size_t vertex, const ufbx_matrix *fallback);
+ufbx_abi ufbx_matrix ufbx_catch_get_skin_vertex_matrix(ufbx_panic *panic, const ufbx_skin_deformer *skin, size_t vertex, const ufbx_matrix *fallback);
+ufbx_inline ufbx_matrix ufbx_get_skin_vertex_matrix(const ufbx_skin_deformer *skin, size_t vertex, const ufbx_matrix *fallback) {
+	return ufbx_catch_get_skin_vertex_matrix(NULL, skin, vertex, fallback);
+}
 
 ufbx_abi ufbx_vec3 ufbx_get_blend_shape_vertex_offset(const ufbx_blend_shape *shape, size_t vertex);
 ufbx_abi ufbx_vec3 ufbx_get_blend_vertex_offset(const ufbx_blend_deformer *blend, size_t vertex);
@@ -3211,27 +3277,51 @@ ufbx_abi ufbx_mesh *ufbx_tessellate_nurbs_surface(const ufbx_nurbs_surface *surf
 
 // Mesh Topology
 
-ufbx_abi uint32_t ufbx_triangulate_face(uint32_t *indices, size_t num_indices, const ufbx_mesh *mesh, ufbx_face face);
+ufbx_abi uint32_t ufbx_catch_triangulate_face(ufbx_panic *panic, uint32_t *indices, size_t num_indices, const ufbx_mesh *mesh, ufbx_face face);
+ufbx_inline uint32_t ufbx_triangulate_face(uint32_t *indices, size_t num_indices, const ufbx_mesh *mesh, ufbx_face face) {
+	return ufbx_catch_triangulate_face(NULL, indices, num_indices, mesh, face);
+}
 
 // Generate the half-edge representation of `mesh` to `topo[mesh->num_indices]`
-ufbx_abi void ufbx_compute_topology(const ufbx_mesh *mesh, ufbx_topo_edge *topo, size_t num_topo);
+ufbx_abi void ufbx_catch_compute_topology(ufbx_panic *panic, const ufbx_mesh *mesh, ufbx_topo_edge *topo, size_t num_topo);
+ufbx_inline void ufbx_compute_topology(const ufbx_mesh *mesh, ufbx_topo_edge *topo, size_t num_topo) {
+	ufbx_catch_compute_topology(NULL, mesh, topo, num_topo);
+}
 
 // Get the next/previous edge around a vertex
 // NOTE: Does not return the half-edge on the opposite side (ie. `topo[index].twin`)
-ufbx_abi int32_t ufbx_topo_next_vertex_edge(const ufbx_topo_edge *topo, size_t num_topo, int32_t index);
-ufbx_abi int32_t ufbx_topo_prev_vertex_edge(const ufbx_topo_edge *topo, size_t num_topo, int32_t index);
 
-ufbx_abi ufbx_vec3 ufbx_get_weighted_face_normal(const ufbx_vertex_vec3 *positions, ufbx_face face);
+ufbx_abi int32_t ufbx_catch_topo_next_vertex_edge(ufbx_panic *panic, const ufbx_topo_edge *topo, size_t num_topo, int32_t index);
+ufbx_inline int32_t ufbx_topo_next_vertex_edge(const ufbx_topo_edge *topo, size_t num_topo, int32_t index) {
+	return ufbx_catch_topo_next_vertex_edge(NULL, topo, num_topo, index);
+}
 
+ufbx_abi int32_t ufbx_catch_topo_prev_vertex_edge(ufbx_panic *panic, const ufbx_topo_edge *topo, size_t num_topo, int32_t index);
+ufbx_inline int32_t ufbx_topo_prev_vertex_edge(const ufbx_topo_edge *topo, size_t num_topo, int32_t index) {
+	return ufbx_catch_topo_prev_vertex_edge(NULL, topo, num_topo, index);
+}
+
+ufbx_abi ufbx_vec3 ufbx_catch_get_weighted_face_normal(ufbx_panic *panic, const ufbx_vertex_vec3 *positions, ufbx_face face);
+ufbx_inline ufbx_vec3 ufbx_get_weighted_face_normal(const ufbx_vertex_vec3 *positions, ufbx_face face) {
+	return ufbx_catch_get_weighted_face_normal(NULL, positions, face);
+}
+
+ufbx_abi size_t ufbx_catch_generate_normal_mapping(ufbx_panic *panic, const ufbx_mesh *mesh,
+	const ufbx_topo_edge *topo, size_t num_topo,
+	int32_t *normal_indices, size_t num_normal_indices, bool assume_smooth);
 ufbx_abi size_t ufbx_generate_normal_mapping(const ufbx_mesh *mesh,
 	const ufbx_topo_edge *topo, size_t num_topo,
 	int32_t *normal_indices, size_t num_normal_indices, bool assume_smooth);
 
+ufbx_abi void ufbx_catch_compute_normals(ufbx_panic *panic, const ufbx_mesh *mesh, const ufbx_vertex_vec3 *positions,
+	const int32_t *normal_indices, size_t num_normal_indices,
+	ufbx_vec3 *normals, size_t num_normals);
 ufbx_abi void ufbx_compute_normals(const ufbx_mesh *mesh, const ufbx_vertex_vec3 *positions,
 	const int32_t *normal_indices, size_t num_normal_indices,
 	ufbx_vec3 *normals, size_t num_normals);
 
 ufbx_abi ufbx_mesh *ufbx_subdivide_mesh(const ufbx_mesh *mesh, size_t level, const ufbx_subdivide_opts *opts, ufbx_error *error);
+
 ufbx_abi void ufbx_free_mesh(ufbx_mesh *mesh);
 ufbx_abi void ufbx_retain_mesh(ufbx_mesh *mesh);
 
@@ -3262,6 +3352,11 @@ ufbx_abi size_t ufbx_sample_geometry_cache_vec3(const ufbx_cache_channel *channe
 ufbx_abi size_t ufbx_generate_indices(const ufbx_vertex_stream *streams, size_t num_streams, uint32_t *indices, size_t num_indices, const ufbx_allocator_opts *allocator, ufbx_error *error);
 
 // -- Inline API
+
+ufbx_abi ufbx_real ufbx_catch_get_vertex_real(ufbx_panic *panic, const ufbx_vertex_real *v, size_t index);
+ufbx_abi ufbx_vec2 ufbx_catch_get_vertex_vec2(ufbx_panic *panic, const ufbx_vertex_vec2 *v, size_t index);
+ufbx_abi ufbx_vec3 ufbx_catch_get_vertex_vec3(ufbx_panic *panic, const ufbx_vertex_vec3 *v, size_t index);
+ufbx_abi ufbx_vec4 ufbx_catch_get_vertex_vec4(ufbx_panic *panic, const ufbx_vertex_vec4 *v, size_t index);
 
 ufbx_inline ufbx_real ufbx_get_vertex_real(const ufbx_vertex_real *v, size_t index) { ufbx_assert(index < v->indices.count); return v->values.data[v->indices.data[index]]; }
 ufbx_inline ufbx_vec2 ufbx_get_vertex_vec2(const ufbx_vertex_vec2 *v, size_t index) { ufbx_assert(index < v->indices.count); return v->values.data[v->indices.data[index]]; }
@@ -3306,6 +3401,13 @@ ufbx_abi void ufbx_ffi_evaluate_nurbs_surface(ufbx_surface_point *retval, const 
 ufbx_abi void ufbx_ffi_get_weighted_face_normal(ufbx_vec3 *retval, const ufbx_vertex_vec3 *positions, const ufbx_face *face);
 ufbx_abi size_t ufbx_ffi_get_triangulate_face_num_indices(const ufbx_face *face);
 ufbx_abi uint32_t ufbx_ffi_triangulate_face(uint32_t *indices, size_t num_indices, const ufbx_mesh *mesh, const ufbx_face *face);
+
+ufbx_inline size_t ufbx_check_index(size_t index, size_t count) {
+	ufbx_assert(index < count);
+	return index;
+}
+
+#define ufbx_at(list, index) ((list).data[ufbx_check_index((index), (list).count)])
 
 #ifdef __cplusplus
 }

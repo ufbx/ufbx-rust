@@ -1,7 +1,7 @@
 use std::ffi::{c_void};
-use std::{marker, result, ptr};
+use std::{marker, result, ptr, mem, str, slice};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe, assert_to_panic};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe};
 use crate::prelude::{Allocator, Stream, call_open_file_cb, call_progress_cb};
 
 #[repr(C)]
@@ -856,8 +856,6 @@ pub enum CacheDataFormat {
     Vec3Float = 2,
     RealDouble = 3,
     Vec3Double = 4,
-    Count = 5,
-    Force32Bit = 2147483647,
 }
 
 impl Default for CacheDataFormat {
@@ -1556,6 +1554,15 @@ impl Default for CoordinateAxis {
     fn default() -> Self { Self::PositiveX }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[derive(Default)]
+pub struct CoordinateAxes {
+    pub right: CoordinateAxis,
+    pub up: CoordinateAxis,
+    pub front: CoordinateAxis,
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TimeMode {
@@ -1611,10 +1618,8 @@ impl Default for SnapMode {
 #[repr(C)]
 pub struct SceneSettings {
     pub props: Props,
-    pub axis_right: CoordinateAxis,
-    pub axis_up: CoordinateAxis,
-    pub axis_front: CoordinateAxis,
-    pub unit_scale_factor: Real,
+    pub axes: CoordinateAxes,
+    pub unit_meters: Real,
     pub frames_per_second: f64,
     pub ambient_color: Vec3,
     pub default_camera: String,
@@ -1622,7 +1627,7 @@ pub struct SceneSettings {
     pub time_protocol: TimeProtocol,
     pub snap_mode: SnapMode,
     pub original_axis_up: CoordinateAxis,
-    pub original_unit_scale_factor: Real,
+    pub original_unit_meters: Real,
 }
 
 #[repr(C)]
@@ -1933,12 +1938,17 @@ pub struct RawLoadOpts {
     pub connect_broken_elements: bool,
     pub allow_nodes_out_of_root: bool,
     pub allow_null_material: bool,
+    pub generate_missing_normals: bool,
     pub file_size_estimate: u64,
     pub read_buffer_size: usize,
     pub filename: RawString,
     pub progress_cb: RawProgressCb,
     pub progress_interval_hint: u64,
     pub open_file_cb: RawOpenFileCb,
+    pub target_axes: CoordinateAxes,
+    pub target_unit_meters: Real,
+    pub no_prop_unit_scaling: bool,
+    pub no_anim_curve_unit_scaling: bool,
     pub use_root_transform: bool,
     pub root_transform: Transform,
     pub _end_zero: u32,
@@ -2007,6 +2017,13 @@ pub struct RawGeometryCacheDataOpts {
     pub use_weight: bool,
     pub weight: Real,
     pub _end_zero: u32,
+}
+
+#[repr(C)]
+pub struct Panic {
+    pub did_panic: bool,
+    pub message_length: usize,
+    pub message: [u8; 128],
 }
 
 #[derive(Default)]
@@ -2105,12 +2122,17 @@ pub struct LoadOpts<'a> {
     pub connect_broken_elements: bool,
     pub allow_nodes_out_of_root: bool,
     pub allow_null_material: bool,
+    pub generate_missing_normals: bool,
     pub file_size_estimate: u64,
     pub read_buffer_size: usize,
     pub filename: Option<&'a str>,
     pub progress_cb: ProgressCb<'a>,
     pub progress_interval_hint: u64,
     pub open_file_cb: OpenFileCb<'a>,
+    pub target_axes: CoordinateAxes,
+    pub target_unit_meters: Real,
+    pub no_prop_unit_scaling: bool,
+    pub no_anim_curve_unit_scaling: bool,
     pub use_root_transform: bool,
     pub root_transform: Transform,
 }
@@ -2134,12 +2156,17 @@ impl RawLoadOpts {
             connect_broken_elements: arg.connect_broken_elements,
             allow_nodes_out_of_root: arg.allow_nodes_out_of_root,
             allow_null_material: arg.allow_null_material,
+            generate_missing_normals: arg.generate_missing_normals,
             file_size_estimate: arg.file_size_estimate,
             read_buffer_size: arg.read_buffer_size,
             filename: RawString::from_rust(&mut arg.filename),
             progress_cb: RawProgressCb::from_rust(&mut arg.progress_cb),
             progress_interval_hint: arg.progress_interval_hint,
             open_file_cb: RawOpenFileCb::from_rust(&mut arg.open_file_cb),
+            target_axes: arg.target_axes,
+            target_unit_meters: arg.target_unit_meters,
+            no_prop_unit_scaling: arg.no_prop_unit_scaling,
+            no_anim_curve_unit_scaling: arg.no_anim_curve_unit_scaling,
             use_root_transform: arg.use_root_transform,
             root_transform: arg.root_transform,
             _end_zero: 0,
@@ -2266,6 +2293,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[link(name="ufbx")]
 extern "C" {
+    pub fn ufbx_is_thread_safe() -> bool;
     pub fn ufbx_load_memory(data: *const c_void, data_size: usize, opts: *const RawLoadOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_load_file(filename: *const u8, opts: *const RawLoadOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_load_file_len(filename: *const u8, filename_len: usize, opts: *const RawLoadOpts, error: *mut Error) -> *mut Scene;
@@ -2302,6 +2330,7 @@ extern "C" {
     pub fn ufbx_evaluate_scene(scene: *const Scene, anim: *const Anim, time: f64, opts: *const RawEvaluateOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_find_prop_texture_len(material: *const Material, name: *const u8, name_len: usize) -> *mut Texture;
     pub fn ufbx_find_shader_prop_len(shader: *const Shader, name: *const u8, name_len: usize) -> String;
+    pub fn ufbx_coordinate_axes_valid(axes: CoordinateAxes) -> bool;
     pub fn ufbx_quat_mul(a: Quat, b: Quat) -> Quat;
     pub fn ufbx_quat_normalize(q: Quat) -> Quat;
     pub fn ufbx_quat_fix_antipodal(q: Quat, reference: Quat) -> Quat;
@@ -2310,13 +2339,14 @@ extern "C" {
     pub fn ufbx_quat_to_euler(q: Quat, order: RotationOrder) -> Vec3;
     pub fn ufbx_euler_to_quat(v: Vec3, order: RotationOrder) -> Quat;
     pub fn ufbx_matrix_mul(a: *const Matrix, b: *const Matrix) -> Matrix;
+    pub fn ufbx_matrix_determinant(m: *const Matrix) -> Real;
     pub fn ufbx_matrix_invert(m: *const Matrix) -> Matrix;
     pub fn ufbx_matrix_for_normals(m: *const Matrix) -> Matrix;
     pub fn ufbx_transform_position(m: *const Matrix, v: Vec3) -> Vec3;
     pub fn ufbx_transform_direction(m: *const Matrix, v: Vec3) -> Vec3;
     pub fn ufbx_transform_to_matrix(t: *const Transform) -> Matrix;
     pub fn ufbx_matrix_to_transform(m: *const Matrix) -> Transform;
-    pub fn ufbx_get_skin_vertex_matrix(skin: *const SkinDeformer, vertex: usize, fallback: *const Matrix) -> Matrix;
+    pub fn ufbx_catch_get_skin_vertex_matrix(panic: *mut Panic, skin: *const SkinDeformer, vertex: usize, fallback: *const Matrix) -> Matrix;
     pub fn ufbx_get_blend_shape_vertex_offset(shape: *const BlendShape, vertex: usize) -> Vec3;
     pub fn ufbx_get_blend_vertex_offset(blend: *const BlendDeformer, vertex: usize) -> Vec3;
     pub fn ufbx_add_blend_shape_vertex_offsets(shape: *const BlendShape, vertices: *mut Vec3, num_vertices: usize, weight: Real);
@@ -2325,12 +2355,14 @@ extern "C" {
     pub fn ufbx_evaluate_nurbs_curve(curve: *const NurbsCurve, u: Real) -> CurvePoint;
     pub fn ufbx_evaluate_nurbs_surface(surface: *const NurbsSurface, u: Real, v: Real) -> SurfacePoint;
     pub fn ufbx_tessellate_nurbs_surface(surface: *const NurbsSurface, opts: *const RawTessellateOpts, error: *mut Error) -> *mut Mesh;
-    pub fn ufbx_triangulate_face(indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: Face) -> u32;
-    pub fn ufbx_compute_topology(mesh: *const Mesh, topo: *mut TopoEdge, num_topo: usize);
-    pub fn ufbx_topo_next_vertex_edge(topo: *const TopoEdge, num_topo: usize, index: i32) -> i32;
-    pub fn ufbx_topo_prev_vertex_edge(topo: *const TopoEdge, num_topo: usize, index: i32) -> i32;
-    pub fn ufbx_get_weighted_face_normal(positions: *const VertexVec3, face: Face) -> Vec3;
+    pub fn ufbx_catch_triangulate_face(panic: *mut Panic, indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: Face) -> u32;
+    pub fn ufbx_catch_compute_topology(panic: *mut Panic, mesh: *const Mesh, topo: *mut TopoEdge, num_topo: usize);
+    pub fn ufbx_catch_topo_next_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: i32) -> i32;
+    pub fn ufbx_catch_topo_prev_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: i32) -> i32;
+    pub fn ufbx_catch_get_weighted_face_normal(panic: *mut Panic, positions: *const VertexVec3, face: Face) -> Vec3;
+    pub fn ufbx_catch_generate_normal_mapping(panic: *mut Panic, mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut i32, num_normal_indices: usize, assume_smooth: bool) -> usize;
     pub fn ufbx_generate_normal_mapping(mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut i32, num_normal_indices: usize, assume_smooth: bool) -> usize;
+    pub fn ufbx_catch_compute_normals(panic: *mut Panic, mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const i32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
     pub fn ufbx_compute_normals(mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const i32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
     pub fn ufbx_subdivide_mesh(mesh: *const Mesh, level: usize, opts: *const RawSubdivideOpts, error: *mut Error) -> *mut Mesh;
     pub fn ufbx_free_mesh(mesh: *mut Mesh);
@@ -2348,6 +2380,10 @@ extern "C" {
     pub fn ufbx_read_geometry_cache_vec3(frame: *const CacheFrame, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_sample_geometry_cache_vec3(channel: *const CacheChannel, time: f64, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_generate_indices(streams: *const VertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
+    pub fn ufbx_catch_get_vertex_real(panic: *mut Panic, v: *const VertexReal, index: usize) -> Real;
+    pub fn ufbx_catch_get_vertex_vec2(panic: *mut Panic, v: *const VertexVec2, index: usize) -> Vec2;
+    pub fn ufbx_catch_get_vertex_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Vec3;
+    pub fn ufbx_catch_get_vertex_vec4(panic: *mut Panic, v: *const VertexVec4, index: usize) -> Vec4;
     pub fn ufbx_get_triangulate_face_num_indices(face: Face) -> usize;
     pub fn ufbx_ffi_find_int_len(retval: *mut i64, props: *const Props, name: *const u8, name_len: usize, def: *const i64);
     pub fn ufbx_ffi_find_vec3_len(retval: *mut Vec3, props: *const Props, name: *const u8, name_len: usize, def: *const Vec3);
@@ -2495,10 +2531,14 @@ unsafe impl Sync for MeshRoot {}
 unsafe impl Send for GeometryCacheRoot {}
 unsafe impl Sync for GeometryCacheRoot {}
 
+pub fn is_thread_safe() -> bool {
+    let result = unsafe { ufbx_is_thread_safe() };
+    result
+}
+
 pub unsafe fn load_memory_raw(data: &[u8], opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_memory(data.as_ptr() as *const c_void, data.len(), opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2514,7 +2554,6 @@ pub fn load_memory(data: &[u8], opts: LoadOpts) -> Result<SceneRoot> {
 pub unsafe fn load_file_raw(filename: &u8, opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_file(filename as *const u8, opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2530,7 +2569,6 @@ pub fn load_file(filename: &u8, opts: LoadOpts) -> Result<SceneRoot> {
 pub unsafe fn load_file_len_raw(filename: &str, opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_file_len(filename.as_ptr(), filename.len(), opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2546,7 +2584,6 @@ pub fn load_file_len(filename: &str, opts: LoadOpts) -> Result<SceneRoot> {
 pub unsafe fn load_stdio_raw(file: *mut c_void, opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_stdio(file as *mut c_void, opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2562,7 +2599,6 @@ pub fn load_stdio(file: *mut c_void, opts: LoadOpts) -> Result<SceneRoot> {
 pub unsafe fn load_stdio_prefix_raw(file: *mut c_void, prefix: &[u8], opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_stdio_prefix(file as *mut c_void, prefix.as_ptr() as *const c_void, prefix.len(), opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2578,7 +2614,6 @@ pub fn load_stdio_prefix(file: *mut c_void, prefix: &[u8], opts: LoadOpts) -> Re
 pub unsafe fn load_stream_raw(stream: &RawStream, opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_stream(stream as *const RawStream, opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2596,7 +2631,6 @@ pub fn load_stream(stream: Stream, opts: LoadOpts) -> Result<SceneRoot> {
 pub unsafe fn load_stream_prefix_raw(stream: &RawStream, prefix: &[u8], opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_stream_prefix(stream as *const RawStream, prefix.as_ptr() as *const c_void, prefix.len(), opts as *const RawLoadOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2613,152 +2647,127 @@ pub fn load_stream_prefix(stream: Stream, prefix: &[u8], opts: LoadOpts) -> Resu
 
 pub fn format_error(dst: &mut [u8], error: &Error) -> usize {
     let result = unsafe { ufbx_format_error(dst.as_mut_ptr(), dst.len(), error as *const Error) };
-    assert_to_panic();
     result
 }
 
 pub fn find_prop_len<'a>(props: &Props, name: &str) -> &'a Prop {
     let result = unsafe { ufbx_find_prop_len(props as *const Props, name.as_ptr(), name.len()) };
-    assert_to_panic();
     unsafe { &*result }
 }
 
 pub fn find_real_len(props: &Props, name: &str, def: Real) -> Real {
     let result = unsafe { ufbx_find_real_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    assert_to_panic();
     result
 }
 
 pub fn find_vec3_len(props: &Props, name: &str, def: Vec3) -> Vec3 {
     let result = unsafe { ufbx_find_vec3_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    assert_to_panic();
     result
 }
 
 pub fn find_int_len(props: &Props, name: &str, def: i64) -> i64 {
     let result = unsafe { ufbx_find_int_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    assert_to_panic();
     result
 }
 
 pub fn find_bool_len(props: &Props, name: &str, def: bool) -> bool {
     let result = unsafe { ufbx_find_bool_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    assert_to_panic();
     result
 }
 
 pub fn find_string_len(props: &Props, name: &str, def: String) -> String {
     let result = unsafe { ufbx_find_string_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    assert_to_panic();
     result
 }
 
 pub fn find_element_len<'a>(scene: &'a Scene, type_: ElementType, name: &str) -> &'a Element {
     let result = unsafe { ufbx_find_element_len(scene as *const Scene, type_, name.as_ptr(), name.len()) };
-    assert_to_panic();
     unsafe { &*result }
 }
 
 pub fn find_node_len<'a>(scene: &'a Scene, name: &str) -> &'a Node {
     let result = unsafe { ufbx_find_node_len(scene as *const Scene, name.as_ptr(), name.len()) };
-    assert_to_panic();
     unsafe { &*result }
 }
 
 pub fn find_anim_stack_len<'a>(scene: &'a Scene, name: &str) -> &'a AnimStack {
     let result = unsafe { ufbx_find_anim_stack_len(scene as *const Scene, name.as_ptr(), name.len()) };
-    assert_to_panic();
     unsafe { &*result }
 }
 
 pub fn find_anim_prop_len<'a>(layer: &'a AnimLayer, element: &'a Element, prop: &str) -> &'a AnimProp {
     let result = unsafe { ufbx_find_anim_prop_len(layer as *const AnimLayer, element as *const Element, prop.as_ptr(), prop.len()) };
-    assert_to_panic();
     unsafe { &*result }
 }
 
 pub fn find_anim_props(layer: &AnimLayer, element: &Element) -> List<AnimProp> {
     let result = unsafe { ufbx_find_anim_props(layer as *const AnimLayer, element as *const Element) };
-    assert_to_panic();
     result
 }
 
 pub fn get_compatible_matrix_for_normals(node: &Node) -> Matrix {
     let result = unsafe { ufbx_get_compatible_matrix_for_normals(node as *const Node) };
-    assert_to_panic();
     result
 }
 
 pub fn inflate(dst: &mut [u8], input: &InflateInput, retain: &mut InflateRetain) -> isize {
     let result = unsafe { ufbx_inflate(dst.as_mut_ptr() as *mut c_void, dst.len(), input as *const InflateInput, retain as *mut InflateRetain) };
-    assert_to_panic();
     result
 }
 
 pub unsafe fn open_file_raw(user: *mut c_void, stream: &mut RawStream, path: &str) -> bool {
     let result = { ufbx_open_file(user as *mut c_void, stream as *mut RawStream, path.as_ptr(), path.len()) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_curve(curve: &AnimCurve, time: f64, default_value: Real) -> Real {
     let result = unsafe { ufbx_evaluate_curve(curve as *const AnimCurve, time, default_value) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_anim_value_real(anim_value: &AnimValue, time: f64) -> Real {
     let result = unsafe { ufbx_evaluate_anim_value_real(anim_value as *const AnimValue, time) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_anim_value_vec2(anim_value: &AnimValue, time: f64) -> Vec2 {
     let result = unsafe { ufbx_evaluate_anim_value_vec2(anim_value as *const AnimValue, time) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_anim_value_vec3(anim_value: &AnimValue, time: f64) -> Vec3 {
     let result = unsafe { ufbx_evaluate_anim_value_vec3(anim_value as *const AnimValue, time) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_prop_len(anim: &Anim, element: &Element, name: &str, time: f64) -> Prop {
     let result = unsafe { ufbx_evaluate_prop_len(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_props(anim: &Anim, element: &Element, time: f64, buffer: &mut Prop, buffer_size: usize) -> Props {
     let result = unsafe { ufbx_evaluate_props(anim as *const Anim, element as *const Element, time, buffer as *mut Prop, buffer_size) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_transform(anim: &Anim, node: &Node, time: f64) -> Transform {
     let result = unsafe { ufbx_evaluate_transform(anim as *const Anim, node as *const Node, time) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_blend_weight(anim: &Anim, channel: &BlendChannel, time: f64) -> Real {
     let result = unsafe { ufbx_evaluate_blend_weight(anim as *const Anim, channel as *const BlendChannel, time) };
-    assert_to_panic();
     result
 }
 
 pub fn prepare_prop_overrides(overrides: &mut [PropOverride]) -> List<PropOverride> {
     let result = unsafe { ufbx_prepare_prop_overrides(overrides.as_mut_ptr(), overrides.len()) };
-    assert_to_panic();
     result
 }
 
 pub unsafe fn evaluate_scene_raw(scene: &Scene, anim: &Anim, time: f64, opts: &RawEvaluateOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_evaluate_scene(scene as *const Scene, anim as *const Anim, time, opts as *const RawEvaluateOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2773,150 +2782,143 @@ pub fn evaluate_scene(scene: &Scene, anim: &Anim, time: f64, opts: EvaluateOpts)
 
 pub fn find_prop_texture_len<'a>(material: &'a Material, name: &str) -> &'a Texture {
     let result = unsafe { ufbx_find_prop_texture_len(material as *const Material, name.as_ptr(), name.len()) };
-    assert_to_panic();
     unsafe { &*result }
 }
 
 pub fn find_shader_prop_len(shader: &Shader, name: &str) -> String {
     let result = unsafe { ufbx_find_shader_prop_len(shader as *const Shader, name.as_ptr(), name.len()) };
-    assert_to_panic();
+    result
+}
+
+pub fn coordinate_axes_valid(axes: CoordinateAxes) -> bool {
+    let result = unsafe { ufbx_coordinate_axes_valid(axes) };
     result
 }
 
 pub fn quat_mul(a: Quat, b: Quat) -> Quat {
     let result = unsafe { ufbx_quat_mul(a, b) };
-    assert_to_panic();
     result
 }
 
 pub fn quat_normalize(q: Quat) -> Quat {
     let result = unsafe { ufbx_quat_normalize(q) };
-    assert_to_panic();
     result
 }
 
 pub fn quat_fix_antipodal(q: Quat, reference: Quat) -> Quat {
     let result = unsafe { ufbx_quat_fix_antipodal(q, reference) };
-    assert_to_panic();
     result
 }
 
 pub fn quat_slerp(a: Quat, b: Quat, t: Real) -> Quat {
     let result = unsafe { ufbx_quat_slerp(a, b, t) };
-    assert_to_panic();
     result
 }
 
 pub fn quat_rotate_vec3(q: Quat, v: Vec3) -> Vec3 {
     let result = unsafe { ufbx_quat_rotate_vec3(q, v) };
-    assert_to_panic();
     result
 }
 
 pub fn quat_to_euler(q: Quat, order: RotationOrder) -> Vec3 {
     let result = unsafe { ufbx_quat_to_euler(q, order) };
-    assert_to_panic();
     result
 }
 
 pub fn euler_to_quat(v: Vec3, order: RotationOrder) -> Quat {
     let result = unsafe { ufbx_euler_to_quat(v, order) };
-    assert_to_panic();
     result
 }
 
 pub fn matrix_mul(a: &Matrix, b: &Matrix) -> Matrix {
     let result = unsafe { ufbx_matrix_mul(a as *const Matrix, b as *const Matrix) };
-    assert_to_panic();
+    result
+}
+
+pub fn matrix_determinant(m: &Matrix) -> Real {
+    let result = unsafe { ufbx_matrix_determinant(m as *const Matrix) };
     result
 }
 
 pub fn matrix_invert(m: &Matrix) -> Matrix {
     let result = unsafe { ufbx_matrix_invert(m as *const Matrix) };
-    assert_to_panic();
     result
 }
 
 pub fn matrix_for_normals(m: &Matrix) -> Matrix {
     let result = unsafe { ufbx_matrix_for_normals(m as *const Matrix) };
-    assert_to_panic();
     result
 }
 
 pub fn transform_position(m: &Matrix, v: Vec3) -> Vec3 {
     let result = unsafe { ufbx_transform_position(m as *const Matrix, v) };
-    assert_to_panic();
     result
 }
 
 pub fn transform_direction(m: &Matrix, v: Vec3) -> Vec3 {
     let result = unsafe { ufbx_transform_direction(m as *const Matrix, v) };
-    assert_to_panic();
     result
 }
 
 pub fn transform_to_matrix(t: &Transform) -> Matrix {
     let result = unsafe { ufbx_transform_to_matrix(t as *const Transform) };
-    assert_to_panic();
     result
 }
 
 pub fn matrix_to_transform(m: &Matrix) -> Transform {
     let result = unsafe { ufbx_matrix_to_transform(m as *const Matrix) };
-    assert_to_panic();
     result
 }
 
 pub fn get_skin_vertex_matrix(skin: &SkinDeformer, vertex: usize, fallback: &Matrix) -> Matrix {
-    let result = unsafe { ufbx_get_skin_vertex_matrix(skin as *const SkinDeformer, vertex, fallback as *const Matrix) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_get_skin_vertex_matrix(&mut panic, skin as *const SkinDeformer, vertex, fallback as *const Matrix) };
+    if panic.did_panic {
+        panic!("ufbx::get_skin_vertex_matrix() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
     result
 }
 
 pub fn get_blend_shape_vertex_offset(shape: &BlendShape, vertex: usize) -> Vec3 {
     let result = unsafe { ufbx_get_blend_shape_vertex_offset(shape as *const BlendShape, vertex) };
-    assert_to_panic();
     result
 }
 
 pub fn get_blend_vertex_offset(blend: &BlendDeformer, vertex: usize) -> Vec3 {
     let result = unsafe { ufbx_get_blend_vertex_offset(blend as *const BlendDeformer, vertex) };
-    assert_to_panic();
     result
 }
 
 pub fn add_blend_shape_vertex_offsets(shape: &BlendShape, vertices: &mut [Vec3], weight: Real) {
     unsafe { ufbx_add_blend_shape_vertex_offsets(shape as *const BlendShape, vertices.as_mut_ptr(), vertices.len(), weight) };
-    assert_to_panic();
 }
 
 pub fn add_blend_vertex_offsets(blend: &BlendDeformer, vertices: &mut [Vec3], weight: Real) {
     unsafe { ufbx_add_blend_vertex_offsets(blend as *const BlendDeformer, vertices.as_mut_ptr(), vertices.len(), weight) };
-    assert_to_panic();
 }
 
 pub fn evaluate_nurbs_basis(basis: &NurbsBasis, u: Real, weights: &mut [Real], derivatives: &mut [Real]) -> usize {
     let result = unsafe { ufbx_evaluate_nurbs_basis(basis as *const NurbsBasis, u, weights.as_mut_ptr(), weights.len(), derivatives.as_mut_ptr(), derivatives.len()) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_nurbs_curve(curve: &NurbsCurve, u: Real) -> CurvePoint {
     let result = unsafe { ufbx_evaluate_nurbs_curve(curve as *const NurbsCurve, u) };
-    assert_to_panic();
     result
 }
 
 pub fn evaluate_nurbs_surface(surface: &NurbsSurface, u: Real, v: Real) -> SurfacePoint {
     let result = unsafe { ufbx_evaluate_nurbs_surface(surface as *const NurbsSurface, u, v) };
-    assert_to_panic();
     result
 }
 
 pub unsafe fn tessellate_nurbs_surface_raw(surface: &NurbsSurface, opts: &RawTessellateOpts) -> Result<MeshRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_tessellate_nurbs_surface(surface as *const NurbsSurface, opts as *const RawTessellateOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2930,49 +2932,97 @@ pub fn tessellate_nurbs_surface(surface: &NurbsSurface, opts: TessellateOpts) ->
 }
 
 pub fn triangulate_face(indices: &mut [u32], mesh: &Mesh, face: Face) -> u32 {
-    let result = unsafe { ufbx_triangulate_face(indices.as_mut_ptr(), indices.len(), mesh as *const Mesh, face) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_triangulate_face(&mut panic, indices.as_mut_ptr(), indices.len(), mesh as *const Mesh, face) };
+    if panic.did_panic {
+        panic!("ufbx::triangulate_face() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
     result
 }
 
 pub fn compute_topology(mesh: &Mesh, topo: &mut [TopoEdge]) {
-    unsafe { ufbx_compute_topology(mesh as *const Mesh, topo.as_mut_ptr(), topo.len()) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    unsafe { ufbx_catch_compute_topology(&mut panic, mesh as *const Mesh, topo.as_mut_ptr(), topo.len()) };
+    if panic.did_panic {
+        panic!("ufbx::compute_topology() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
 }
 
 pub fn topo_next_vertex_edge(topo: &[TopoEdge], index: i32) -> i32 {
-    let result = unsafe { ufbx_topo_next_vertex_edge(topo.as_ptr(), topo.len(), index) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_topo_next_vertex_edge(&mut panic, topo.as_ptr(), topo.len(), index) };
+    if panic.did_panic {
+        panic!("ufbx::topo_next_vertex_edge() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
     result
 }
 
 pub fn topo_prev_vertex_edge(topo: &[TopoEdge], index: i32) -> i32 {
-    let result = unsafe { ufbx_topo_prev_vertex_edge(topo.as_ptr(), topo.len(), index) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_topo_prev_vertex_edge(&mut panic, topo.as_ptr(), topo.len(), index) };
+    if panic.did_panic {
+        panic!("ufbx::topo_prev_vertex_edge() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
     result
 }
 
 pub fn get_weighted_face_normal(positions: &VertexVec3, face: Face) -> Vec3 {
-    let result = unsafe { ufbx_get_weighted_face_normal(positions as *const VertexVec3, face) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_get_weighted_face_normal(&mut panic, positions as *const VertexVec3, face) };
+    if panic.did_panic {
+        panic!("ufbx::get_weighted_face_normal() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
     result
 }
 
 pub fn generate_normal_mapping(mesh: &Mesh, topo: &[TopoEdge], normal_indices: &mut [i32], assume_smooth: bool) -> usize {
-    let result = unsafe { ufbx_generate_normal_mapping(mesh as *const Mesh, topo.as_ptr(), topo.len(), normal_indices.as_mut_ptr(), normal_indices.len(), assume_smooth) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_generate_normal_mapping(&mut panic, mesh as *const Mesh, topo.as_ptr(), topo.len(), normal_indices.as_mut_ptr(), normal_indices.len(), assume_smooth) };
+    if panic.did_panic {
+        panic!("ufbx::generate_normal_mapping() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
     result
 }
 
 pub fn compute_normals(mesh: &Mesh, positions: &VertexVec3, normal_indices: &[i32], normals: &mut [Vec3]) {
-    unsafe { ufbx_compute_normals(mesh as *const Mesh, positions as *const VertexVec3, normal_indices.as_ptr(), normal_indices.len(), normals.as_mut_ptr(), normals.len()) };
-    assert_to_panic();
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    unsafe { ufbx_catch_compute_normals(&mut panic, mesh as *const Mesh, positions as *const VertexVec3, normal_indices.as_ptr(), normal_indices.len(), normals.as_mut_ptr(), normals.len()) };
+    if panic.did_panic {
+        panic!("ufbx::compute_normals() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
 }
 
 pub unsafe fn subdivide_mesh_raw(mesh: &Mesh, level: usize, opts: &RawSubdivideOpts) -> Result<MeshRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_subdivide_mesh(mesh as *const Mesh, level, opts as *const RawSubdivideOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -2988,7 +3038,6 @@ pub fn subdivide_mesh(mesh: &Mesh, level: usize, opts: SubdivideOpts) -> Result<
 pub unsafe fn load_geometry_cache_raw(filename: &u8, opts: &RawGeometryCacheOpts) -> Result<GeometryCacheRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_geometry_cache(filename as *const u8, opts as *const RawGeometryCacheOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -3004,7 +3053,6 @@ pub fn load_geometry_cache(filename: &u8, opts: GeometryCacheOpts) -> Result<Geo
 pub unsafe fn load_geometry_cache_len_raw(filename: &str, opts: &RawGeometryCacheOpts) -> Result<GeometryCacheRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_geometry_cache_len(filename.as_ptr(), filename.len(), opts as *const RawGeometryCacheOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -3019,31 +3067,26 @@ pub fn load_geometry_cache_len(filename: &str, opts: GeometryCacheOpts) -> Resul
 
 pub fn get_read_geometry_cache_real_num_data(frame: &CacheFrame) -> usize {
     let result = unsafe { ufbx_get_read_geometry_cache_real_num_data(frame as *const CacheFrame) };
-    assert_to_panic();
     result
 }
 
 pub fn get_sample_geometry_cache_real_num_data(channel: &CacheChannel, time: f64) -> usize {
     let result = unsafe { ufbx_get_sample_geometry_cache_real_num_data(channel as *const CacheChannel, time) };
-    assert_to_panic();
     result
 }
 
 pub fn get_read_geometry_cache_vec3_num_data(frame: &CacheFrame) -> usize {
     let result = unsafe { ufbx_get_read_geometry_cache_vec3_num_data(frame as *const CacheFrame) };
-    assert_to_panic();
     result
 }
 
 pub fn get_sample_geometry_cache_vec3_num_data(channel: &CacheChannel, time: f64) -> usize {
     let result = unsafe { ufbx_get_sample_geometry_cache_vec3_num_data(channel as *const CacheChannel, time) };
-    assert_to_panic();
     result
 }
 
 pub unsafe fn read_geometry_cache_real_raw(frame: &CacheFrame, data: &mut [Real], opts: &RawGeometryCacheDataOpts) -> usize {
     let result = { ufbx_read_geometry_cache_real(frame as *const CacheFrame, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
-    assert_to_panic();
     result
 }
 
@@ -3055,7 +3098,6 @@ pub fn read_geometry_cache_real(frame: &CacheFrame, data: &mut [Real], opts: Geo
 
 pub unsafe fn sample_geometry_cache_real_raw(channel: &CacheChannel, time: f64, data: &mut [Real], opts: &RawGeometryCacheDataOpts) -> usize {
     let result = { ufbx_sample_geometry_cache_real(channel as *const CacheChannel, time, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
-    assert_to_panic();
     result
 }
 
@@ -3067,7 +3109,6 @@ pub fn sample_geometry_cache_real(channel: &CacheChannel, time: f64, data: &mut 
 
 pub unsafe fn read_geometry_cache_vec3_raw(frame: &CacheFrame, data: &mut [Vec3], opts: &RawGeometryCacheDataOpts) -> usize {
     let result = { ufbx_read_geometry_cache_vec3(frame as *const CacheFrame, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
-    assert_to_panic();
     result
 }
 
@@ -3079,7 +3120,6 @@ pub fn read_geometry_cache_vec3(frame: &CacheFrame, data: &mut [Vec3], opts: Geo
 
 pub unsafe fn sample_geometry_cache_vec3_raw(channel: &CacheChannel, time: f64, data: &mut [Vec3], opts: &RawGeometryCacheDataOpts) -> usize {
     let result = { ufbx_sample_geometry_cache_vec3(channel as *const CacheChannel, time, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
-    assert_to_panic();
     result
 }
 
@@ -3092,7 +3132,6 @@ pub fn sample_geometry_cache_vec3(channel: &CacheChannel, time: f64, data: &mut 
 pub unsafe fn generate_indices_raw(streams: &[VertexStream], indices: &mut [u32], allocator: &RawAllocatorOpts) -> Result<usize> {
     let mut error: Error = Error::default();
     let result = { ufbx_generate_indices(streams.as_ptr(), streams.len(), indices.as_mut_ptr(), indices.len(), allocator as *const RawAllocatorOpts, &mut error) };
-    assert_to_panic();
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -3105,9 +3144,60 @@ pub fn generate_indices(streams: &[VertexStream], indices: &mut [u32], allocator
     unsafe { generate_indices_raw(streams, indices, &allocator_raw) }
 }
 
+pub fn get_vertex_real(v: &VertexReal, index: usize) -> Real {
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_get_vertex_real(&mut panic, v as *const VertexReal, index) };
+    if panic.did_panic {
+        panic!("ufbx::get_vertex_real() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
+    result
+}
+
+pub fn get_vertex_vec2(v: &VertexVec2, index: usize) -> Vec2 {
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_get_vertex_vec2(&mut panic, v as *const VertexVec2, index) };
+    if panic.did_panic {
+        panic!("ufbx::get_vertex_vec2() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
+    result
+}
+
+pub fn get_vertex_vec3(v: &VertexVec3, index: usize) -> Vec3 {
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_get_vertex_vec3(&mut panic, v as *const VertexVec3, index) };
+    if panic.did_panic {
+        panic!("ufbx::get_vertex_vec3() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
+    result
+}
+
+pub fn get_vertex_vec4(v: &VertexVec4, index: usize) -> Vec4 {
+    let mut panic: Panic = Panic{
+        did_panic: false,
+        message_length: 0,
+        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
+    };
+    let result = unsafe { ufbx_catch_get_vertex_vec4(&mut panic, v as *const VertexVec4, index) };
+    if panic.did_panic {
+        panic!("ufbx::get_vertex_vec4() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+    }
+    result
+}
+
 pub fn get_triangulate_face_num_indices(face: Face) -> usize {
     let result = unsafe { ufbx_get_triangulate_face_num_indices(face) };
-    assert_to_panic();
     result
 }
 

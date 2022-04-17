@@ -1,4 +1,3 @@
-from re import L
 from typing import Optional, List
 
 import ufbx_ir as ir
@@ -8,9 +7,9 @@ import json
 
 uses = r"""
 use std::ffi::{c_void};
-use std::{marker, result, ptr};
+use std::{marker, result, ptr, mem, str, slice};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe, assert_to_panic};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe};
 """.strip()
 
 post_ffi = r"""
@@ -205,7 +204,10 @@ def get_arg_name(arg: ir.Argument):
     return name
 
 def get_func_name(fn: ir.Function):
-    return fn.short_name
+    if fn.is_catch:
+        return fn.short_name.replace("catch_", "")
+    else:
+        return fn.short_name
 
 class RustType:
     def __init__(self, irt: Optional[ir.Type], inner: Optional["RustType"]):
@@ -577,6 +579,8 @@ def init_function(fn: ir.Function):
             pass
         elif arg.kind == "error":
             pass
+        elif arg.kind == "panic":
+            pass
         else:
             arg_type = types[arg.type]
             while arg_type.inner:
@@ -931,6 +935,7 @@ def emit_arg_pass(args: List[str], ra: RustArgument):
 def emit_function(rf: RustFunction, non_raw: bool = False):
     if rf.ir.is_inline: return
     if rf.ir.is_ffi: return
+    if rf.ir.catch_name: return
     if rf.ir.kind in { "retain", "free" }: return
 
     is_raw = rf.is_raw and not non_raw
@@ -982,6 +987,15 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
         if rf.ir.has_error:
             emit(f"let mut error: Error = Error::default();")
             arg_pass.append("&mut error")
+        if rf.ir.has_panic:
+            emit(f"let mut panic: Panic = Panic{{")
+            indent()
+            emit("did_panic: false,")
+            emit("message_length: 0,")
+            emit(f"message: unsafe {{ mem::MaybeUninit::uninit().assume_init() }},")
+            unindent()
+            emit("};")
+            arg_pass.insert(0, "&mut panic")
 
         arg_pass_str = ", ".join(arg_pass)
         if not rf.return_type.is_void:
@@ -989,8 +1003,12 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
         else:
             emit(f"{unsafe}{{ {rf.ir.name}({arg_pass_str}) }};")
 
-        emit("assert_to_panic();")
-
+        if rf.ir.has_panic:
+            emit(f"if panic.did_panic {{")
+            indent()
+            emit(f"panic!(\"ufbx::{rf.name}() {{}}\", unsafe {{ str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) }});")
+            unindent()
+            emit("}")
         if rf.ir.has_error:
             emit(f"if error.type_ != ErrorType::None {{")
             indent()
@@ -1104,7 +1122,7 @@ def emit_file():
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser("gen_rust.py")
-    parser.add_argument("-i", help="Input ufbx.json file")
+    parser.add_argument("-i", help="Input ufbx_typed.json file")
     parser.add_argument("-o", help="Output path")
     argv = parser.parse_args()
 
