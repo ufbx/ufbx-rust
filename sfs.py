@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from abc import abstractmethod
 from subprocess import Popen, PIPE
 from typing import List, Union, Tuple, NamedTuple, Optional, Iterator
@@ -453,7 +455,11 @@ def do_update(argv, config: Config):
             local_path = os.path.join(dst_dir, file.local)
             remote_path = os.path.join(old_dep_dir, file.remote)
             if os.path.exists(local_path) and not files_equal(local_path, remote_path, file.binary):
-                modified_files.add(file.local)
+                new_remote_path = os.path.join(new_dep_dir, file.remote)
+                if os.path.exists(new_remote_path) and files_equal(local_path, new_remote_path, file.binary):
+                    info(f"  Already updated {file.local}")
+                else:
+                    modified_files.add(file.local)
 
         if modified_files and not (argv.merge or argv.overwrite):
             info("WARNING: Not updated! Files modified locally (specify '--merge' or '--overwrite' to resolve):")
