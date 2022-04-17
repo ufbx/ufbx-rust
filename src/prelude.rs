@@ -3,7 +3,6 @@ use std::marker::PhantomData;
 use std::ops::{Deref, Index};
 use std::alloc::{self,Layout,System,GlobalAlloc};
 use std::ffi::{c_void};
-use std::os::raw::c_char;
 use std::cmp::min;
 use std::io::{Read,Seek,SeekFrom};
 use std::fs::File;
@@ -20,6 +19,12 @@ pub struct List<T> {
     data: *const T,
     pub count: usize,
     _marker: PhantomData<T>,
+}
+
+impl<T> List<T> {
+    pub(crate) unsafe fn as_static_ref(&self) -> &'static [T] {
+        slice::from_raw_parts(self.data, self.count)
+    }
 }
 
 impl<T> AsRef<[T]> for List<T> {
@@ -55,6 +60,12 @@ pub struct RefList<T> {
     data: *const Ref<T>,
     pub count: usize,
     _marker: PhantomData<T>,
+}
+
+impl<T> RefList<T> {
+    pub(crate) unsafe fn as_static_ref(&self) -> &'static [Ref<T>] {
+        slice::from_raw_parts(self.data, self.count)
+    }
 }
 
 impl<T> AsRef<[Ref<T>]> for RefList<T> {
@@ -160,6 +171,12 @@ pub struct String {
     data: *const u8,
     pub length: usize,
     _marker: PhantomData<u8>,
+}
+
+impl String {
+    pub(crate) unsafe fn as_static_ref(&self) -> &'static str {
+        str::from_utf8_unchecked(slice::from_raw_parts(self.data, self.length))
+    }
 }
 
 impl AsRef<str> for String {
@@ -496,9 +513,32 @@ impl Debug for Error {
     }
 }
 
-#[link(name="ufbx")]
-extern "C" {
-    pub fn ufbxi_rust_pop_assert() -> *const c_char;
+#[repr(C)]
+pub struct ExternalRef<'a, T> {
+    data: T,
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T> ExternalRef<'a, T> {
+    pub unsafe fn new(t: T) -> Self {
+        Self {
+            data: t,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> AsRef<T> for ExternalRef<'a, T> {
+    fn as_ref(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<'a, T> Deref for ExternalRef<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 /*

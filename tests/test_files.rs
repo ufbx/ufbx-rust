@@ -6,11 +6,17 @@ fn type_name_of<T>(_: &T) -> &'static str {
 
 #[test]
 fn load_file() {
-    let result = ufbx::load_file_len("build/model.fbx", ufbx::LoadOpts::default());
+    assert!(ufbx::is_thread_safe());
+
+    let result = ufbx::load_file("build/model.fbx", ufbx::LoadOpts::default());
     let scene: ufbx::SceneRoot = result.expect("Expected to load scene");
     println!("first: {}", type_name_of(&scene.nodes[0]));
     for node in &scene.nodes {
         println!("{}", type_name_of(node));
+
+        let prop = ufbx::evaluate_prop(&scene.anim, &node.element, "Lcl Translation", 0.1);
+        println!("{}", prop.name);
+
         match &node.mesh {
         Some(mesh) => {
             let face = mesh.faces[0];

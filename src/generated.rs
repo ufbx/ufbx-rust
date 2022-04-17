@@ -1,7 +1,7 @@
 use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str, slice};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe, ExternalRef};
 use crate::prelude::{Allocator, Stream, call_open_file_cb, call_progress_cb};
 
 #[repr(C)]
@@ -2635,59 +2635,54 @@ pub fn format_error(dst: &mut [u8], error: &Error) -> usize {
     result
 }
 
-pub fn find_prop<'a>(props: &Props, name: &str) -> &'a Prop {
+pub fn find_prop<'a>(props: &'a Props, name: &str) -> Option<&'a Prop> {
     let result = unsafe { ufbx_find_prop_len(props as *const Props, name.as_ptr(), name.len()) };
-    unsafe { &*result }
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_real(props: &Props, name: &str, def: Real) -> Real {
-    let result = unsafe { ufbx_find_real_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    result
+pub fn find_real(props: &Props, name: &str) -> Option<Real> {
+    find_prop(props, name).map(|p| p.value_vec3.x)
 }
 
-pub fn find_vec3(props: &Props, name: &str, def: Vec3) -> Vec3 {
-    let result = unsafe { ufbx_find_vec3_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    result
+pub fn find_vec3(props: &Props, name: &str) -> Option<Vec3> {
+    find_prop(props, name).map(|p| p.value_vec3)
 }
 
-pub fn find_int(props: &Props, name: &str, def: i64) -> i64 {
-    let result = unsafe { ufbx_find_int_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    result
+pub fn find_int(props: &Props, name: &str) -> Option<i64> {
+    find_prop(props, name).map(|p| p.value_int)
 }
 
-pub fn find_bool(props: &Props, name: &str, def: bool) -> bool {
-    let result = unsafe { ufbx_find_bool_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    result
+pub fn find_bool(props: &Props, name: &str) -> Option<bool> {
+    find_prop(props, name).map(|p| p.value_int != 0)
 }
 
-pub fn find_string(props: &Props, name: &str, def: String) -> String {
-    let result = unsafe { ufbx_find_string_len(props as *const Props, name.as_ptr(), name.len(), def) };
-    result
+pub fn find_string<'a>(props: &'a Props, name: &str) -> Option<&'a str> {
+    find_prop(props, name).map(|p| p.value_str.as_ref())
 }
 
-pub fn find_element<'a>(scene: &'a Scene, type_: ElementType, name: &str) -> &'a Element {
+pub fn find_element<'a>(scene: &'a Scene, type_: ElementType, name: &str) -> Option<&'a Element> {
     let result = unsafe { ufbx_find_element_len(scene as *const Scene, type_, name.as_ptr(), name.len()) };
-    unsafe { &*result }
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_node<'a>(scene: &'a Scene, name: &str) -> &'a Node {
+pub fn find_node<'a>(scene: &'a Scene, name: &str) -> Option<&'a Node> {
     let result = unsafe { ufbx_find_node_len(scene as *const Scene, name.as_ptr(), name.len()) };
-    unsafe { &*result }
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_anim_stack<'a>(scene: &'a Scene, name: &str) -> &'a AnimStack {
+pub fn find_anim_stack<'a>(scene: &'a Scene, name: &str) -> Option<&'a AnimStack> {
     let result = unsafe { ufbx_find_anim_stack_len(scene as *const Scene, name.as_ptr(), name.len()) };
-    unsafe { &*result }
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_anim_prop<'a>(layer: &'a AnimLayer, element: &'a Element, prop: &str) -> &'a AnimProp {
+pub fn find_anim_prop<'a>(layer: &'a AnimLayer, element: &'a Element, prop: &str) -> Option<&'a AnimProp> {
     let result = unsafe { ufbx_find_anim_prop_len(layer as *const AnimLayer, element as *const Element, prop.as_ptr(), prop.len()) };
-    unsafe { &*result }
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_anim_props(layer: &AnimLayer, element: &Element) -> List<AnimProp> {
+pub fn find_anim_props<'a>(layer: &'a AnimLayer, element: &'a Element) -> &'a [AnimProp] {
     let result = unsafe { ufbx_find_anim_props(layer as *const AnimLayer, element as *const Element) };
-    result
+    unsafe { result.as_static_ref() }
 }
 
 pub fn get_compatible_matrix_for_normals(node: &Node) -> Matrix {
@@ -2725,14 +2720,18 @@ pub fn evaluate_anim_value_vec3(anim_value: &AnimValue, time: f64) -> Vec3 {
     result
 }
 
-pub fn evaluate_prop(anim: &Anim, element: &Element, name: &str, time: f64) -> Prop {
+pub fn evaluate_prop<'a, 'b>(anim: &'a Anim, element: &'a Element, name: &'b str, time: f64) -> ExternalRef<'b, Prop>
+    where 'a: 'b
+{
     let result = unsafe { ufbx_evaluate_prop_len(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time) };
-    result
+    unsafe { ExternalRef::new(result) }
 }
 
-pub fn evaluate_props(anim: &Anim, element: &Element, time: f64, buffer: &mut Prop, buffer_size: usize) -> Props {
-    let result = unsafe { ufbx_evaluate_props(anim as *const Anim, element as *const Element, time, buffer as *mut Prop, buffer_size) };
-    result
+pub fn evaluate_props<'a, 'b>(anim: &'a Anim, element: &'a Element, time: f64, buffer: &'b mut [ExternalRef<'b, Prop>]) -> ExternalRef<'b, Props>
+    where 'a: 'b
+{
+    let result = unsafe { ufbx_evaluate_props(anim as *const Anim, element as *const Element, time, buffer.as_ptr() as *mut Prop, buffer.len()) };
+    unsafe { ExternalRef::new(result) }
 }
 
 pub fn evaluate_transform(anim: &Anim, node: &Node, time: f64) -> Transform {
@@ -2745,10 +2744,7 @@ pub fn evaluate_blend_weight(anim: &Anim, channel: &BlendChannel, time: f64) -> 
     result
 }
 
-pub fn prepare_prop_overrides(overrides: &mut [PropOverride]) -> List<PropOverride> {
-    let result = unsafe { ufbx_prepare_prop_overrides(overrides.as_mut_ptr(), overrides.len()) };
-    result
-}
+// TODO: ufbx_prepare_prop_overrides()
 
 pub unsafe fn evaluate_scene_raw(scene: &Scene, anim: &Anim, time: f64, opts: &RawEvaluateOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
@@ -2765,14 +2761,14 @@ pub fn evaluate_scene(scene: &Scene, anim: &Anim, time: f64, opts: EvaluateOpts)
     unsafe { evaluate_scene_raw(scene, anim, time, &opts_raw) }
 }
 
-pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> &'a Texture {
+pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> Option<&'a Texture> {
     let result = unsafe { ufbx_find_prop_texture_len(material as *const Material, name.as_ptr(), name.len()) };
-    unsafe { &*result }
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_shader_prop(shader: &Shader, name: &str) -> String {
+pub fn find_shader_prop<'a>(shader: &'a Shader, name: &'a str) -> &'a str {
     let result = unsafe { ufbx_find_shader_prop_len(shader as *const Shader, name.as_ptr(), name.len()) };
-    result
+    unsafe { result.as_static_ref() }
 }
 
 pub fn coordinate_axes_valid(axes: CoordinateAxes) -> bool {
@@ -3169,6 +3165,204 @@ pub fn get_vertex_vec4(v: &VertexVec4, index: usize) -> Vec4 {
 pub fn get_triangulate_face_num_indices(face: Face) -> usize {
     let result = unsafe { ufbx_get_triangulate_face_num_indices(face) };
     result
+}
+
+impl Props {
+
+    pub fn find_prop<'a>(&'a self, name: &str) -> Option<&'a Prop> {
+        find_prop(&self, name)
+    }
+
+    pub fn find_real(self: &Props, name: &str) -> Option<Real> {
+        find_real(self, name)
+    }
+
+    pub fn find_vec3(self: &Props, name: &str) -> Option<Vec3> {
+        find_vec3(self, name)
+    }
+
+    pub fn find_int(self: &Props, name: &str) -> Option<i64> {
+        find_int(self, name)
+    }
+
+    pub fn find_bool(self: &Props, name: &str) -> Option<bool> {
+        find_bool(self, name)
+    }
+
+    pub fn find_string<'a>(self: &'a Props, name: &str) -> Option<&'a str> {
+        find_string(self, name)
+    }
+}
+
+impl Node {
+
+    pub fn get_compatible_matrix_for_normals(&self) -> Matrix {
+        get_compatible_matrix_for_normals(&self)
+    }
+
+    pub fn evaluate_transform(&self, anim: &Anim, time: f64) -> Transform {
+        evaluate_transform(anim, &self, time)
+    }
+}
+
+impl Mesh {
+
+    pub fn triangulate_face(&self, indices: &mut [u32], face: Face) -> u32 {
+        triangulate_face(indices, &self, face)
+    }
+
+    pub fn subdivide(&self, level: usize, opts: SubdivideOpts) -> Result<MeshRoot> {
+        subdivide_mesh(&self, level, opts)
+    }
+}
+
+impl NurbsBasis {
+
+    pub fn evaluate(&self, u: Real, weights: &mut [Real], derivatives: &mut [Real]) -> usize {
+        evaluate_nurbs_basis(&self, u, weights, derivatives)
+    }
+}
+
+impl NurbsCurve {
+
+    pub fn evaluate(&self, u: Real) -> CurvePoint {
+        evaluate_nurbs_curve(&self, u)
+    }
+}
+
+impl NurbsSurface {
+
+    pub fn evaluate(&self, u: Real, v: Real) -> SurfacePoint {
+        evaluate_nurbs_surface(&self, u, v)
+    }
+
+    pub fn tessellate(&self, opts: TessellateOpts) -> Result<MeshRoot> {
+        tessellate_nurbs_surface(&self, opts)
+    }
+}
+
+impl SkinDeformer {
+
+    pub fn get_skin_vertex_matrix(&self, vertex: usize, fallback: &Matrix) -> Matrix {
+        get_skin_vertex_matrix(&self, vertex, fallback)
+    }
+}
+
+impl BlendDeformer {
+
+    pub fn get_vertex_offset(&self, vertex: usize) -> Vec3 {
+        get_blend_vertex_offset(&self, vertex)
+    }
+
+    pub fn add_vertex_offsets(&self, vertices: &mut [Vec3], weight: Real) {
+        add_blend_vertex_offsets(&self, vertices, weight)
+    }
+}
+
+impl BlendChannel {
+
+    pub fn evaluate_blend_weight(&self, anim: &Anim, time: f64) -> Real {
+        evaluate_blend_weight(anim, &self, time)
+    }
+}
+
+impl BlendShape {
+
+    pub fn get_vertex_offset(&self, vertex: usize) -> Vec3 {
+        get_blend_shape_vertex_offset(&self, vertex)
+    }
+
+    pub fn add_vertex_offsets(&self, vertices: &mut [Vec3], weight: Real) {
+        add_blend_shape_vertex_offsets(&self, vertices, weight)
+    }
+}
+
+impl CacheFrame {
+
+    pub fn read_real(&self, data: &mut [Real], opts: GeometryCacheDataOpts) -> usize {
+        read_geometry_cache_real(&self, data, opts)
+    }
+
+    pub fn read_vec3(&self, data: &mut [Vec3], opts: GeometryCacheDataOpts) -> usize {
+        read_geometry_cache_vec3(&self, data, opts)
+    }
+}
+
+impl CacheChannel {
+
+    pub fn sample_real(&self, time: f64, data: &mut [Real], opts: GeometryCacheDataOpts) -> usize {
+        sample_geometry_cache_real(&self, time, data, opts)
+    }
+
+    pub fn sample_vec3(&self, time: f64, data: &mut [Vec3], opts: GeometryCacheDataOpts) -> usize {
+        sample_geometry_cache_vec3(&self, time, data, opts)
+    }
+}
+
+impl Material {
+
+    pub fn find_prop_texture<'a>(&'a self, name: &str) -> Option<&'a Texture> {
+        find_prop_texture(&self, name)
+    }
+}
+
+impl Shader {
+
+    pub fn find_shader_prop<'a>(&'a self, name: &'a str) -> &'a str {
+        find_shader_prop(self, name)
+    }
+}
+
+impl AnimLayer {
+
+    pub fn find_anim_prop<'a>(&'a self, element: &'a Element, prop: &str) -> Option<&'a AnimProp> {
+        find_anim_prop(&self, element, prop)
+    }
+
+    pub fn find_anim_props<'a>(&'a self, element: &'a Element) -> &'a [AnimProp] {
+        find_anim_props(&self, element)
+    }
+}
+
+impl AnimValue {
+
+    pub fn evaluate_real(&self, time: f64) -> Real {
+        evaluate_anim_value_real(&self, time)
+    }
+
+    pub fn evaluate_vec2(&self, time: f64) -> Vec2 {
+        evaluate_anim_value_vec2(&self, time)
+    }
+
+    pub fn evaluate_vec3(&self, time: f64) -> Vec3 {
+        evaluate_anim_value_vec3(&self, time)
+    }
+}
+
+impl AnimCurve {
+
+    pub fn evaluate(&self, time: f64, default_value: Real) -> Real {
+        evaluate_curve(&self, time, default_value)
+    }
+}
+
+impl Scene {
+
+    pub fn find_element<'a>(&'a self, type_: ElementType, name: &str) -> Option<&'a Element> {
+        find_element(&self, type_, name)
+    }
+
+    pub fn find_node<'a>(&'a self, name: &str) -> Option<&'a Node> {
+        find_node(&self, name)
+    }
+
+    pub fn find_anim_stack<'a>(&'a self, name: &str) -> Option<&'a AnimStack> {
+        find_anim_stack(&self, name)
+    }
+
+    pub fn evaluate(&self, anim: &Anim, time: f64, opts: EvaluateOpts) -> Result<SceneRoot> {
+        evaluate_scene(&self, anim, time, opts)
+    }
 }
 
 pub enum ElementData<'a> {

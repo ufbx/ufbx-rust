@@ -9,7 +9,7 @@ uses = r"""
 use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str, slice};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe, ExternalRef};
 """.strip()
 
 post_ffi = r"""
@@ -178,6 +178,104 @@ ignore_non_raw = {
     "ufbx_open_file",
 }
 
+override_functions = { }
+override_member_functions = { }
+
+override_functions["ufbx_find_real_len"] = """
+pub fn find_real(props: &Props, name: &str) -> Option<Real> {
+    find_prop(props, name).map(|p| p.value_vec3.x)
+}
+"""
+
+override_functions["ufbx_find_vec3_len"] = """
+pub fn find_vec3(props: &Props, name: &str) -> Option<Vec3> {
+    find_prop(props, name).map(|p| p.value_vec3)
+}
+"""
+
+override_functions["ufbx_find_int_len"] = """
+pub fn find_int(props: &Props, name: &str) -> Option<i64> {
+    find_prop(props, name).map(|p| p.value_int)
+}
+"""
+
+override_functions["ufbx_find_bool_len"] = """
+pub fn find_bool(props: &Props, name: &str) -> Option<bool> {
+    find_prop(props, name).map(|p| p.value_int != 0)
+}
+"""
+
+override_functions["ufbx_find_string_len"] = """
+pub fn find_string<'a>(props: &'a Props, name: &str) -> Option<&'a str> {
+    find_prop(props, name).map(|p| p.value_str.as_ref())
+}
+"""
+
+override_functions["ufbx_find_shader_prop_len"] = """
+pub fn find_shader_prop<'a>(shader: &'a Shader, name: &'a str) -> &'a str {
+    let result = unsafe { ufbx_find_shader_prop_len(shader as *const Shader, name.as_ptr(), name.len()) };
+    unsafe { result.as_static_ref() }
+}
+"""
+
+override_functions["ufbx_evaluate_prop_len"] = """
+pub fn evaluate_prop<'a, 'b>(anim: &'a Anim, element: &'a Element, name: &'b str, time: f64) -> ExternalRef<'b, Prop>
+    where 'a: 'b
+{
+    let result = unsafe { ufbx_evaluate_prop_len(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time) };
+    unsafe { ExternalRef::new(result) }
+}
+"""
+
+override_functions["ufbx_prepare_prop_overrides"] = """
+// TODO: ufbx_prepare_prop_overrides()
+"""
+
+override_functions["ufbx_evaluate_props"] = """
+pub fn evaluate_props<'a, 'b>(anim: &'a Anim, element: &'a Element, time: f64, buffer: &'b mut [ExternalRef<'b, Prop>]) -> ExternalRef<'b, Props>
+    where 'a: 'b
+{
+    let result = unsafe { ufbx_evaluate_props(anim as *const Anim, element as *const Element, time, buffer.as_ptr() as *mut Prop, buffer.len()) };
+    unsafe { ExternalRef::new(result) }
+}
+"""
+
+override_member_functions["ufbx_find_real_len"] = """
+pub fn find_real(self: &Props, name: &str) -> Option<Real> {
+    find_real(self, name)
+}
+"""
+
+override_member_functions["ufbx_find_vec3_len"] = """
+pub fn find_vec3(self: &Props, name: &str) -> Option<Vec3> {
+    find_vec3(self, name)
+}
+"""
+
+override_member_functions["ufbx_find_int_len"] = """
+pub fn find_int(self: &Props, name: &str) -> Option<i64> {
+    find_int(self, name)
+}
+"""
+
+override_member_functions["ufbx_find_bool_len"] = """
+pub fn find_bool(self: &Props, name: &str) -> Option<bool> {
+    find_bool(self, name)
+}
+"""
+
+override_member_functions["ufbx_find_string_len"] = """
+pub fn find_string<'a>(self: &'a Props, name: &str) -> Option<&'a str> {
+    find_string(self, name)
+}
+"""
+
+override_member_functions["ufbx_find_shader_prop_len"] = """
+pub fn find_shader_prop<'a>(&'a self, name: &'a str) -> &'a str {
+    find_shader_prop(self, name)
+}
+"""
+
 def get_struct_name(st: ir.Struct):
     name = ir.to_pascal(st.short_name)
     if st.is_input or st.is_callback or st.is_interface:
@@ -211,6 +309,13 @@ def get_func_name(fn: ir.Function):
         name = name[:-4]
     return name
 
+def get_member_func_name(fn: ir.Function, name: str):
+    if fn.is_catch:
+        name = name.replace("catch_", "")
+    if fn.is_len:
+        name = name[:-4]
+    return name
+
 class RustType:
     def __init__(self, irt: Optional[ir.Type], inner: Optional["RustType"]):
         self.ir = irt
@@ -222,6 +327,7 @@ class RustType:
         self.is_synthetic = False
         self.is_function = False
         self.is_raw = False
+        self.is_string = False
         self.kind = ""
         self.inner = inner
         if irt:
@@ -238,6 +344,8 @@ class RustType:
                         self.is_ref_list = True
                         data_type = file.types[data_type.inner]
                     self.inner = init_type(data_type)
+                if st.name == "ufbx_string":
+                    self.is_string = True
             elif irt.kind == "enum":
                 en = file.enums[irt.base_name]
                 self.name = get_enum_name(en)
@@ -316,8 +424,8 @@ class RustType:
         elif self.is_function:
             return self.fmt_raw()
         elif self.is_list:
-            list_type = "RefList" if self.is_ref_list else "List"
-            return f"{list_type}<{self.inner.fmt_member(lifetime)}>"
+            lt = f"'{lifetime} " if lifetime else ""
+            return f"&{lt}[{self.inner.fmt_arg(lifetime)}]"
         elif self.kind == "array":
             num = self.ir.array_length
             return f"[{self.inner.fmt_member(lifetime)}; {num}]"
@@ -330,6 +438,9 @@ class RustType:
                 return f"Option<&{lt}{mut}{self.inner.fmt_arg(lifetime)}>"
             else:
                 return f"&{lt}{mut}{self.inner.fmt_arg(lifetime)}"
+        elif self.is_string:
+            lt = f"'{lifetime} " if lifetime else ""
+            return f"&{lt}str"
         else:
             if self.needs_lifetime:
                 lt = f"<'{lifetime}>" if lifetime else ""
@@ -423,7 +534,7 @@ class RustEnum:
         self.values = []
 
 class RustArgument:
-    def __init__(self, arg: ir.Argument, kind: str):
+    def __init__(self, arg: ir.Argument, kind: str, original_index: int):
         self.ir = arg
         self.num_ir = None
         self.name = get_arg_name(arg)
@@ -432,6 +543,7 @@ class RustArgument:
         self.kind = kind
         leaf = self.type.get_leaf()
         self.is_raw = leaf.is_raw
+        self.original_index = original_index
 
     def fmt_arg(self, lifetime: str, non_raw: bool = False) -> str:
         if not self.ir.return_ref:
@@ -457,6 +569,7 @@ class RustFunction:
         self.name = get_func_name(fn)
         self.args = []
         self.is_raw = False
+        self.emitted = False
 
         if fn.alloc_type:
             name = alloc_types[fn.alloc_type]
@@ -564,19 +677,19 @@ def init_enum(en: ir.Enum):
 def init_function(fn: ir.Function):
     rf = RustFunction(fn)
     functions[fn.name] = rf
-    for arg in fn.arguments:
+    for arg_ix, arg in enumerate(fn.arguments):
         if arg.kind == "stringPointer":
-            rf.args.append(RustArgument(arg, "string"))
+            rf.args.append(RustArgument(arg, "string", arg_ix))
         elif arg.kind == "stringLength":
             pass
         elif arg.kind == "arrayPointer":
-            ra = RustArgument(arg, "slice")
+            ra = RustArgument(arg, "slice", arg_ix)
             ra.type = ra.type.inner
             rf.args.append(ra)
         elif arg.kind == "arrayLength":
             pass
         elif arg.kind == "blobPointer":
-            rf.args.append(RustArgument(arg, "blob"))
+            rf.args.append(RustArgument(arg, "blob", arg_ix))
         elif arg.kind == "blobSize":
             pass
         elif arg.kind == "error":
@@ -589,7 +702,7 @@ def init_function(fn: ir.Function):
                 arg_type = arg_type.inner
             if arg_type.is_raw:
                 rf.is_raw = True
-            rf.args.append(RustArgument(arg, arg.kind))
+            rf.args.append(RustArgument(arg, arg.kind, arg_ix))
 
 def init_file():
     for name in file.types:
@@ -879,6 +992,12 @@ def fmt_ffi_type(typ: ir.Type, lifetime: str):
         inner = file.types[typ.inner]
         mut = "const " if typ.is_const else "mut "
         return f"*{mut}{fmt_ffi_type(inner, lifetime)}"
+    elif typ.key == "ufbx_string":
+        return f"String"
+    elif types[typ.key].is_list:
+        rtyp = types[typ.key]
+        list_type = "RefList" if rtyp.is_ref_list else "List"
+        return f"{list_type}<{rtyp.inner.fmt_member(lifetime)}>"
     elif typ.key in primitive_types:
         return primitive_types[typ.key]
     else:
@@ -940,11 +1059,19 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
     if rf.ir.catch_name: return
     if rf.ir.len_name: return
     if rf.ir.kind in { "retain", "free" }: return
+    rf.emitted = True
+
+    if rf.ir.name in override_functions:
+        emit()
+        emit_lines(override_functions[rf.ir.name].strip())
+        return
 
     is_raw = rf.is_raw and not non_raw
 
     needs_ref = False
     if rf.return_type.kind == "pointer":
+        needs_ref = True
+    elif rf.return_type.is_string or rf.return_type.is_list:
         needs_ref = True
 
     lt = "<'a>" if needs_ref else ""
@@ -958,7 +1085,10 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
 
     ret = ""
     if not rf.return_type.is_void:
-        ret = f" -> {rf.return_type.fmt_arg(lifetime, force_const=True)}"
+        rt = rf.return_type.fmt_arg(lifetime, force_const=True)
+        if rf.ir.nullable_return:
+            rt = f"Option<{rt}>"
+        ret = f" -> {rt}"
 
     is_unsafe = False
 
@@ -1024,8 +1154,13 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
             if rf.ir.alloc_type:
                 alloc_type = alloc_types[rf.ir.alloc_type]
                 res = f"{alloc_type}::new({res})"
+            elif rf.return_type.is_list:
+                res = f"{unsafe}{{ {res}.as_static_ref() }}"
             elif rf.return_type.kind == "pointer":
-                res = f"{unsafe}{{ &*{res} }}"
+                if rf.ir.nullable_return:
+                    res = f"if result.is_null() {{ None }} else {{ {unsafe}{{ Some(&*{res}) }} }}"
+                else:
+                    res = f"{unsafe}{{ &*{res} }}"
             if rf.ir.has_error:
                 res = f"Ok({res})"
 
@@ -1037,6 +1172,74 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
     if rf.is_raw and not non_raw:
         if rf.ir.name not in ignore_non_raw:
             emit_function(rf, non_raw=True)
+
+def emit_struct_impl(rs: RustStruct):
+    if not rs.ir: return
+    if not rs.ir.member_functions: return
+
+    members = []
+    for name in rs.ir.member_functions:
+        rf = functions[name]
+        if rf.emitted:
+            members.append((file.member_functions[name], rf))
+
+    if not members: return
+
+    emit()
+    emit(f"impl {rs.name} {{")
+    indent()
+
+    for mf, rf in members:
+        if mf.func in override_member_functions:
+            emit()
+            emit_lines(override_member_functions[mf.func].strip())
+            continue
+
+        func = file.functions[mf.func]
+        name = get_member_func_name(func, mf.member_name)
+
+        non_raw = rf.is_raw
+
+        needs_ref = False
+        if rf.return_type.kind == "pointer":
+            needs_ref = True
+        elif rf.return_type.is_string or rf.return_type.is_list:
+            needs_ref = True
+
+        lt = "<'a>" if needs_ref else ""
+        lifetime = "a" if needs_ref else ""
+        self_lt = "'a " if needs_ref else ""
+
+        args = [arg for arg in rf.args if arg.original_index != mf.self_index]
+        arg_fmt = [arg.fmt_arg(lifetime, non_raw) for arg in args]
+        arg_fmt.insert(0, f"&{self_lt}self")
+        arg_str = ", ".join(arg_fmt)
+
+        ret = ""
+        if not rf.return_type.is_void:
+            rt = rf.return_type.fmt_arg(lifetime, force_const=True)
+            if rf.ir.nullable_return:
+                rt = f"Option<{rt}>"
+            ret = f" -> {rt}"
+
+        emit()
+        emit(f"pub fn {name}{lt}({arg_str}){ret} {{")
+        indent()
+
+        pass_args = []
+        for arg in rf.args:
+            if arg.original_index == mf.self_index:
+                pass_args.append("&self")
+            else:
+                pass_args.append(arg.name)
+        pass_str = ", ".join(pass_args)
+        emit(f"{rf.name}({pass_str})")
+
+        unindent()
+        emit("}")
+
+    unindent()
+    emit("}")
 
 def emit_element_data():
     emit()
@@ -1117,6 +1320,10 @@ def emit_file():
     for decl in file.declarations:
         if decl.kind == "function":
             emit_function(functions[decl.name])
+
+    for decl in file.declarations:
+        if decl.kind == "struct":
+            emit_struct_impl(structs[decl.name])
 
     emit_element_data()
 
