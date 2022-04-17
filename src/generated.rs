@@ -2551,22 +2551,7 @@ pub fn load_memory(data: &[u8], opts: LoadOpts) -> Result<SceneRoot> {
     unsafe { load_memory_raw(data, &opts_raw) }
 }
 
-pub unsafe fn load_file_raw(filename: &u8, opts: &RawLoadOpts) -> Result<SceneRoot> {
-    let mut error: Error = Error::default();
-    let result = { ufbx_load_file(filename as *const u8, opts as *const RawLoadOpts, &mut error) };
-    if error.type_ != ErrorType::None {
-        return Err(error)
-    }
-    Ok(SceneRoot::new(result))
-}
-
-pub fn load_file(filename: &u8, opts: LoadOpts) -> Result<SceneRoot> {
-    let mut opts_mut = opts;
-    let opts_raw = RawLoadOpts::from_rust(&mut opts_mut);
-    unsafe { load_file_raw(filename, &opts_raw) }
-}
-
-pub unsafe fn load_file_len_raw(filename: &str, opts: &RawLoadOpts) -> Result<SceneRoot> {
+pub unsafe fn load_file_raw(filename: &str, opts: &RawLoadOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_file_len(filename.as_ptr(), filename.len(), opts as *const RawLoadOpts, &mut error) };
     if error.type_ != ErrorType::None {
@@ -2575,10 +2560,10 @@ pub unsafe fn load_file_len_raw(filename: &str, opts: &RawLoadOpts) -> Result<Sc
     Ok(SceneRoot::new(result))
 }
 
-pub fn load_file_len(filename: &str, opts: LoadOpts) -> Result<SceneRoot> {
+pub fn load_file(filename: &str, opts: LoadOpts) -> Result<SceneRoot> {
     let mut opts_mut = opts;
     let opts_raw = RawLoadOpts::from_rust(&mut opts_mut);
-    unsafe { load_file_len_raw(filename, &opts_raw) }
+    unsafe { load_file_raw(filename, &opts_raw) }
 }
 
 pub unsafe fn load_stdio_raw(file: *mut c_void, opts: &RawLoadOpts) -> Result<SceneRoot> {
@@ -2650,52 +2635,52 @@ pub fn format_error(dst: &mut [u8], error: &Error) -> usize {
     result
 }
 
-pub fn find_prop_len<'a>(props: &Props, name: &str) -> &'a Prop {
+pub fn find_prop<'a>(props: &Props, name: &str) -> &'a Prop {
     let result = unsafe { ufbx_find_prop_len(props as *const Props, name.as_ptr(), name.len()) };
     unsafe { &*result }
 }
 
-pub fn find_real_len(props: &Props, name: &str, def: Real) -> Real {
+pub fn find_real(props: &Props, name: &str, def: Real) -> Real {
     let result = unsafe { ufbx_find_real_len(props as *const Props, name.as_ptr(), name.len(), def) };
     result
 }
 
-pub fn find_vec3_len(props: &Props, name: &str, def: Vec3) -> Vec3 {
+pub fn find_vec3(props: &Props, name: &str, def: Vec3) -> Vec3 {
     let result = unsafe { ufbx_find_vec3_len(props as *const Props, name.as_ptr(), name.len(), def) };
     result
 }
 
-pub fn find_int_len(props: &Props, name: &str, def: i64) -> i64 {
+pub fn find_int(props: &Props, name: &str, def: i64) -> i64 {
     let result = unsafe { ufbx_find_int_len(props as *const Props, name.as_ptr(), name.len(), def) };
     result
 }
 
-pub fn find_bool_len(props: &Props, name: &str, def: bool) -> bool {
+pub fn find_bool(props: &Props, name: &str, def: bool) -> bool {
     let result = unsafe { ufbx_find_bool_len(props as *const Props, name.as_ptr(), name.len(), def) };
     result
 }
 
-pub fn find_string_len(props: &Props, name: &str, def: String) -> String {
+pub fn find_string(props: &Props, name: &str, def: String) -> String {
     let result = unsafe { ufbx_find_string_len(props as *const Props, name.as_ptr(), name.len(), def) };
     result
 }
 
-pub fn find_element_len<'a>(scene: &'a Scene, type_: ElementType, name: &str) -> &'a Element {
+pub fn find_element<'a>(scene: &'a Scene, type_: ElementType, name: &str) -> &'a Element {
     let result = unsafe { ufbx_find_element_len(scene as *const Scene, type_, name.as_ptr(), name.len()) };
     unsafe { &*result }
 }
 
-pub fn find_node_len<'a>(scene: &'a Scene, name: &str) -> &'a Node {
+pub fn find_node<'a>(scene: &'a Scene, name: &str) -> &'a Node {
     let result = unsafe { ufbx_find_node_len(scene as *const Scene, name.as_ptr(), name.len()) };
     unsafe { &*result }
 }
 
-pub fn find_anim_stack_len<'a>(scene: &'a Scene, name: &str) -> &'a AnimStack {
+pub fn find_anim_stack<'a>(scene: &'a Scene, name: &str) -> &'a AnimStack {
     let result = unsafe { ufbx_find_anim_stack_len(scene as *const Scene, name.as_ptr(), name.len()) };
     unsafe { &*result }
 }
 
-pub fn find_anim_prop_len<'a>(layer: &'a AnimLayer, element: &'a Element, prop: &str) -> &'a AnimProp {
+pub fn find_anim_prop<'a>(layer: &'a AnimLayer, element: &'a Element, prop: &str) -> &'a AnimProp {
     let result = unsafe { ufbx_find_anim_prop_len(layer as *const AnimLayer, element as *const Element, prop.as_ptr(), prop.len()) };
     unsafe { &*result }
 }
@@ -2740,7 +2725,7 @@ pub fn evaluate_anim_value_vec3(anim_value: &AnimValue, time: f64) -> Vec3 {
     result
 }
 
-pub fn evaluate_prop_len(anim: &Anim, element: &Element, name: &str, time: f64) -> Prop {
+pub fn evaluate_prop(anim: &Anim, element: &Element, name: &str, time: f64) -> Prop {
     let result = unsafe { ufbx_evaluate_prop_len(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time) };
     result
 }
@@ -2780,12 +2765,12 @@ pub fn evaluate_scene(scene: &Scene, anim: &Anim, time: f64, opts: EvaluateOpts)
     unsafe { evaluate_scene_raw(scene, anim, time, &opts_raw) }
 }
 
-pub fn find_prop_texture_len<'a>(material: &'a Material, name: &str) -> &'a Texture {
+pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> &'a Texture {
     let result = unsafe { ufbx_find_prop_texture_len(material as *const Material, name.as_ptr(), name.len()) };
     unsafe { &*result }
 }
 
-pub fn find_shader_prop_len(shader: &Shader, name: &str) -> String {
+pub fn find_shader_prop(shader: &Shader, name: &str) -> String {
     let result = unsafe { ufbx_find_shader_prop_len(shader as *const Shader, name.as_ptr(), name.len()) };
     result
 }
@@ -3035,22 +3020,7 @@ pub fn subdivide_mesh(mesh: &Mesh, level: usize, opts: SubdivideOpts) -> Result<
     unsafe { subdivide_mesh_raw(mesh, level, &opts_raw) }
 }
 
-pub unsafe fn load_geometry_cache_raw(filename: &u8, opts: &RawGeometryCacheOpts) -> Result<GeometryCacheRoot> {
-    let mut error: Error = Error::default();
-    let result = { ufbx_load_geometry_cache(filename as *const u8, opts as *const RawGeometryCacheOpts, &mut error) };
-    if error.type_ != ErrorType::None {
-        return Err(error)
-    }
-    Ok(GeometryCacheRoot::new(result))
-}
-
-pub fn load_geometry_cache(filename: &u8, opts: GeometryCacheOpts) -> Result<GeometryCacheRoot> {
-    let mut opts_mut = opts;
-    let opts_raw = RawGeometryCacheOpts::from_rust(&mut opts_mut);
-    unsafe { load_geometry_cache_raw(filename, &opts_raw) }
-}
-
-pub unsafe fn load_geometry_cache_len_raw(filename: &str, opts: &RawGeometryCacheOpts) -> Result<GeometryCacheRoot> {
+pub unsafe fn load_geometry_cache_raw(filename: &str, opts: &RawGeometryCacheOpts) -> Result<GeometryCacheRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_load_geometry_cache_len(filename.as_ptr(), filename.len(), opts as *const RawGeometryCacheOpts, &mut error) };
     if error.type_ != ErrorType::None {
@@ -3059,10 +3029,10 @@ pub unsafe fn load_geometry_cache_len_raw(filename: &str, opts: &RawGeometryCach
     Ok(GeometryCacheRoot::new(result))
 }
 
-pub fn load_geometry_cache_len(filename: &str, opts: GeometryCacheOpts) -> Result<GeometryCacheRoot> {
+pub fn load_geometry_cache(filename: &str, opts: GeometryCacheOpts) -> Result<GeometryCacheRoot> {
     let mut opts_mut = opts;
     let opts_raw = RawGeometryCacheOpts::from_rust(&mut opts_mut);
-    unsafe { load_geometry_cache_len_raw(filename, &opts_raw) }
+    unsafe { load_geometry_cache_raw(filename, &opts_raw) }
 }
 
 pub fn get_read_geometry_cache_real_num_data(frame: &CacheFrame) -> usize {

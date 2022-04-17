@@ -204,10 +204,12 @@ def get_arg_name(arg: ir.Argument):
     return name
 
 def get_func_name(fn: ir.Function):
+    name = fn.short_name
     if fn.is_catch:
-        return fn.short_name.replace("catch_", "")
-    else:
-        return fn.short_name
+        name = name.replace("catch_", "")
+    if fn.is_len:
+        name = name[:-4]
+    return name
 
 class RustType:
     def __init__(self, irt: Optional[ir.Type], inner: Optional["RustType"]):
@@ -936,6 +938,7 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
     if rf.ir.is_inline: return
     if rf.ir.is_ffi: return
     if rf.ir.catch_name: return
+    if rf.ir.len_name: return
     if rf.ir.kind in { "retain", "free" }: return
 
     is_raw = rf.is_raw and not non_raw
