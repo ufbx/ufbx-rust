@@ -10,6 +10,10 @@ fn load_file() {
 
     let result = ufbx::load_file("build/model.fbx", ufbx::LoadOpts::default());
     let scene: ufbx::SceneRoot = result.expect("Expected to load scene");
+
+    let state = scene.evaluate(&scene.anim, 0.1, Default::default()).unwrap();
+    println!("state: {}", state.nodes.len());
+
     println!("first: {}", type_name_of(&scene.nodes[0]));
     for node in &scene.nodes {
         println!("{}", type_name_of(node));
