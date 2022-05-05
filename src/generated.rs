@@ -2293,6 +2293,18 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[link(name="ufbx")]
 extern "C" {
+    pub static ufbx_empty_string: String;
+    pub static ufbx_identity_matrix: Matrix;
+    pub static ufbx_identity_transform: Transform;
+    pub static ufbx_zero_vec2: Vec2;
+    pub static ufbx_zero_vec3: Vec3;
+    pub static ufbx_zero_vec4: Vec4;
+    pub static ufbx_identity_quat: Quat;
+    pub static ufbx_axes_right_handed_y_up: CoordinateAxes;
+    pub static ufbx_axes_right_handed_z_up: CoordinateAxes;
+    pub static ufbx_axes_left_handed_y_up: CoordinateAxes;
+    pub static ufbx_axes_left_handed_z_up: CoordinateAxes;
+    pub static ufbx_source_version: u32;
     pub fn ufbx_is_thread_safe() -> bool;
     pub fn ufbx_load_memory(data: *const c_void, data_size: usize, opts: *const RawLoadOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_load_file(filename: *const u8, opts: *const RawLoadOpts, error: *mut Error) -> *mut Scene;
@@ -3166,6 +3178,41 @@ pub fn get_triangulate_face_num_indices(face: Face) -> usize {
     let result = unsafe { ufbx_get_triangulate_face_num_indices(face) };
     result
 }
+pub fn identity_matrix() -> Matrix { unsafe { ufbx_identity_matrix } }
+pub fn identity_transform() -> Transform { unsafe { ufbx_identity_transform } }
+pub fn zero_vec2() -> Vec2 { unsafe { ufbx_zero_vec2 } }
+pub fn zero_vec3() -> Vec3 { unsafe { ufbx_zero_vec3 } }
+pub fn zero_vec4() -> Vec4 { unsafe { ufbx_zero_vec4 } }
+pub fn identity_quat() -> Quat { unsafe { ufbx_identity_quat } }
+pub fn axes_right_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_y_up } }
+pub fn axes_right_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_z_up } }
+pub fn axes_left_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_y_up } }
+pub fn axes_left_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_z_up } }
+pub fn source_version() -> u32 { unsafe { ufbx_source_version } }
+
+impl Vec2 {
+    pub fn zero() -> Vec2 { unsafe { ufbx_zero_vec2 } }
+}
+
+impl Vec3 {
+    pub fn zero() -> Vec3 { unsafe { ufbx_zero_vec3 } }
+}
+
+impl Vec4 {
+    pub fn zero() -> Vec4 { unsafe { ufbx_zero_vec4 } }
+}
+
+impl Quat {
+    pub fn identity() -> Quat { unsafe { ufbx_identity_quat } }
+}
+
+impl Transform {
+    pub fn identity() -> Transform { unsafe { ufbx_identity_transform } }
+}
+
+impl Matrix {
+    pub fn identity() -> Matrix { unsafe { ufbx_identity_matrix } }
+}
 
 impl Props {
 
@@ -3344,6 +3391,13 @@ impl AnimCurve {
     pub fn evaluate(&self, time: f64, default_value: Real) -> Real {
         evaluate_curve(&self, time, default_value)
     }
+}
+
+impl CoordinateAxes {
+    pub fn right_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_y_up } }
+    pub fn right_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_z_up } }
+    pub fn left_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_y_up } }
+    pub fn left_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_z_up } }
 }
 
 impl Scene {

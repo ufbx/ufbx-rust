@@ -309,6 +309,10 @@ def get_func_name(fn: ir.Function):
         name = name[:-4]
     return name
 
+def get_global_name(fn: ir.Global):
+    name = fn.short_name
+    return name
+
 def get_member_func_name(fn: ir.Function, name: str):
     if fn.is_catch:
         name = name.replace("catch_", "")
@@ -1029,6 +1033,14 @@ def emit_ffi_function(fn: ir.Function):
         ret = fmt_ffi_type(file.types[fn.return_type], lifetime)
         emit(f"pub fn {fn.name}{lt}({args}) -> {ret};")
 
+def emit_ffi_global(gl: ir.Global):
+    typ = file.types[gl.type]
+    if typ.kind != "const":
+        return
+    typ = file.types[typ.inner]
+    gt = fmt_ffi_type(typ, "")
+    emit(f"pub static {gl.name}: {gt};")
+
 def emit_arg_pass(args: List[str], ra: RustArgument):
     if ra.kind == "string":
         if ra.is_const:
@@ -1173,21 +1185,46 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
         if rf.ir.name not in ignore_non_raw:
             emit_function(rf, non_raw=True)
 
+def emit_global(gl: ir.Global):
+    typ = file.types[gl.type]
+    if typ.kind != "const": return
+    typ = file.types[typ.inner]
+    if typ.base_name == "ufbx_string": return
+
+    gt = fmt_ffi_type(typ, "")
+    name = get_global_name(gl)
+    emit(f"pub fn {name}() -> {gt} {{ unsafe {{ {gl.name} }} }}")
+
 def emit_struct_impl(rs: RustStruct):
     if not rs.ir: return
-    if not rs.ir.member_functions: return
+    if not rs.ir.member_functions and not rs.ir.member_globals: return
 
     members = []
+    member_globals = []
     for name in rs.ir.member_functions:
         rf = functions[name]
         if rf.emitted:
             members.append((file.member_functions[name], rf))
 
-    if not members: return
+    for name in rs.ir.member_globals:
+        mg = file.member_globals[name]
+        gl = file.globals[name]
+        typ = file.types[gl.type]
+        if typ.kind != "const": continue
+        typ = file.types[typ.inner]
+        if typ.base_name == "ufbx_string": continue
+        member_globals.append((mg, gl, typ))
+
+    if not members and not member_globals: return
 
     emit()
     emit(f"impl {rs.name} {{")
     indent()
+
+    for mg, gl, typ in member_globals:
+        gt = fmt_ffi_type(typ, "")
+        name = mg.member_name
+        emit(f"pub fn {name}() -> {gt} {{ unsafe {{ {gl.name} }} }}")
 
     for mf, rf in members:
         if mf.func in override_member_functions:
@@ -1311,6 +1348,8 @@ def emit_file():
     for decl in file.declarations:
         if decl.kind == "function":
             emit_ffi_function(file.functions[decl.name])
+        elif decl.kind == "global":
+            emit_ffi_global(file.globals[decl.name])
 
     unindent()
     emit("}")
@@ -1320,6 +1359,10 @@ def emit_file():
     for decl in file.declarations:
         if decl.kind == "function":
             emit_function(functions[decl.name])
+
+    for decl in file.declarations:
+        if decl.kind == "global":
+            emit_global(file.globals[decl.name])
 
     for decl in file.declarations:
         if decl.kind == "struct":

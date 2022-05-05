@@ -33,6 +33,33 @@ fn load_file() {
     }
 }
 
+#[test]
+fn doc_getting_started_1() {
+    let scene = ufbx::load_file("build/model.fbx", ufbx::LoadOpts::default()).unwrap();
+
+    for node in &scene.nodes {
+        println!("{}", node.element.name);
+    }
+}
+
+#[test]
+fn doc_getting_started_2() {
+    let opts = ufbx::LoadOpts {
+        target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
+        target_unit_meters: 1.0,
+        ..Default::default()
+    };
+
+    let scene = match ufbx::load_file("build/model.fbx", opts) {
+        Ok(scene) => scene,
+        Err(error) => panic!("Failed to load scene: {}", error.description),
+    };
+
+    for node in &scene.nodes {
+        println!("{}", node.element.name);
+    }
+}
+
 /*
 #[test]
 fn load_progress() {K
