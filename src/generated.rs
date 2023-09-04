@@ -3255,6 +3255,11 @@ pub struct GeometryCacheRoot {
     _marker: marker::PhantomData<GeometryCache>,
 }
 
+pub struct AnimRoot {
+    anim: *mut Anim,
+    _marker: marker::PhantomData<Anim>,
+}
+
 impl SceneRoot {
     fn new(scene: *mut Scene) -> SceneRoot {
         SceneRoot {
@@ -3292,6 +3297,15 @@ impl GeometryCacheRoot {
     }
 }
 
+impl AnimRoot {
+    fn new(anim: *mut Anim) -> AnimRoot {
+        AnimRoot {
+            anim: anim,
+            _marker: marker::PhantomData,
+        }
+    }
+}
+
 impl Drop for SceneRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_scene(self.scene) }
@@ -3313,6 +3327,12 @@ impl Drop for LineCurveRoot {
 impl Drop for GeometryCacheRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_geometry_cache(self.cache) }
+    }
+}
+
+impl Drop for AnimRoot {
+    fn drop(&mut self) {
+        unsafe { ufbx_free_anim(self.anim) }
     }
 }
 
@@ -3344,6 +3364,13 @@ impl Clone for GeometryCacheRoot {
     }
 }
 
+impl Clone for AnimRoot {
+    fn clone(&self) -> Self {
+        unsafe { ufbx_retain_anim(self.anim) }
+        AnimRoot::new(self.anim)
+    }
+}
+
 impl Deref for SceneRoot {
     type Target = Scene;
     fn deref(&self) -> &Self::Target {
@@ -3372,6 +3399,13 @@ impl Deref for GeometryCacheRoot {
     }
 }
 
+impl Deref for AnimRoot {
+    type Target = Anim;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.anim }
+    }
+}
+
 unsafe impl Send for SceneRoot {}
 unsafe impl Sync for SceneRoot {}
 
@@ -3383,6 +3417,9 @@ unsafe impl Sync for LineCurveRoot {}
 
 unsafe impl Send for GeometryCacheRoot {}
 unsafe impl Sync for GeometryCacheRoot {}
+
+unsafe impl Send for AnimRoot {}
+unsafe impl Sync for AnimRoot {}
 
 pub fn is_thread_safe() -> bool {
     let result = unsafe { ufbx_is_thread_safe() };
@@ -3638,13 +3675,13 @@ pub fn evaluate_scene(scene: &Scene, anim: &Anim, time: f64, opts: EvaluateOpts)
     unsafe { evaluate_scene_raw(scene, anim, time, &opts_raw) }
 }
 
-pub fn create_anim(scene: &Scene, opts: &AnimOpts) -> Option<Result<&mut Anim>> {
+pub fn create_anim(scene: &Scene, opts: &AnimOpts) -> Result<AnimRoot> {
     let mut error: Error = Error::default();
     let result = unsafe { ufbx_create_anim(scene as *const Scene, opts as *const AnimOpts, &mut error) };
     if error.type_ != ErrorType::None {
         return Err(error)
     }
-    Ok(result)
+    Ok(AnimRoot::new(result))
 }
 
 pub fn retain_anim(anim: &mut Anim) {
