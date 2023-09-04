@@ -7,8 +7,8 @@
         },
         {
             "name": "ufbx",
-            "url": "https://github.com/bqqbarbhg/ufbx",
-            "branch": "strong-types",
+            "url": "https://github.com/ufbx/ufbx",
+            "branch": "integration",
             "files": [
                 {
                     "root": "ufbx",

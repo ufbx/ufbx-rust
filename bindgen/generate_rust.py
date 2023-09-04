@@ -7,9 +7,10 @@ import json
 
 uses = r"""
 use std::ffi::{c_void};
-use std::{marker, result, ptr, mem, str, slice};
+use std::{marker, result, ptr, mem, str};
+use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe, ExternalRef};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, format_flags};
 """.strip()
 
 post_ffi = r"""
@@ -22,6 +23,11 @@ pub struct SceneRoot {
 pub struct MeshRoot {
     mesh: *mut Mesh,
     _marker: marker::PhantomData<Mesh>,
+}
+
+pub struct LineCurveRoot {
+    line_curve: *mut LineCurve,
+    _marker: marker::PhantomData<LineCurve>,
 }
 
 pub struct GeometryCacheRoot {
@@ -47,6 +53,16 @@ impl MeshRoot {
     }
 }
 
+impl LineCurveRoot {
+    fn new(line_curve: *mut LineCurve) -> LineCurveRoot {
+        LineCurveRoot {
+            line_curve: line_curve,
+            _marker: marker::PhantomData,
+        }
+    }
+}
+
+
 impl GeometryCacheRoot {
     fn new(cache: *mut GeometryCache) -> GeometryCacheRoot {
         GeometryCacheRoot {
@@ -68,6 +84,12 @@ impl Drop for MeshRoot {
     }
 }
 
+impl Drop for LineCurveRoot {
+    fn drop(&mut self) {
+        unsafe { ufbx_free_line_curve(self.line_curve) }
+    }
+}
+
 impl Drop for GeometryCacheRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_geometry_cache(self.cache) }
@@ -85,6 +107,13 @@ impl Clone for MeshRoot {
     fn clone(&self) -> Self {
         unsafe { ufbx_retain_mesh(self.mesh) }
         MeshRoot::new(self.mesh)
+    }
+}
+
+impl Clone for LineCurveRoot {
+    fn clone(&self) -> Self {
+        unsafe { ufbx_retain_line_curve(self.line_curve) }
+        LineCurveRoot::new(self.line_curve)
     }
 }
 
@@ -109,6 +138,13 @@ impl Deref for MeshRoot {
     }
 }
 
+impl Deref for LineCurveRoot {
+    type Target = LineCurve;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.line_curve }
+    }
+}
+
 impl Deref for GeometryCacheRoot {
     type Target = GeometryCache;
     fn deref(&self) -> &Self::Target {
@@ -121,6 +157,9 @@ unsafe impl Sync for SceneRoot {}
 
 unsafe impl Send for MeshRoot {}
 unsafe impl Sync for MeshRoot {}
+
+unsafe impl Send for LineCurveRoot {}
+unsafe impl Sync for LineCurveRoot {}
 
 unsafe impl Send for GeometryCacheRoot {}
 unsafe impl Sync for GeometryCacheRoot {}
@@ -138,11 +177,13 @@ file: ir.File = None
 alloc_types = {
     "scene": "SceneRoot",
     "mesh": "MeshRoot",
+    "line": "LineCurveRoot",
     "geometryCache": "GeometryCacheRoot",
 }
 
 callback_signatures = {
-    "ufbx_open_file_cb": "(&str) -> Option<Stream>",
+    "ufbx_open_file_cb": "(&str, &OpenFileInfo) -> Option<Stream>",
+    "ufbx_close_memory_cb": "(*mut c_void, usize) -> ()",
     "ufbx_progress_cb": "(&Progress) -> ProgressResult",
 }
 
@@ -167,6 +208,7 @@ default_derive_types = {
     "ufbx_error_frame",
     "ufbx_error_type",
     "ufbx_error",
+    "ufbx_panic",
 }
 
 ignore_types = {
@@ -176,39 +218,35 @@ ignore_types = {
 
 ignore_non_raw = {
     "ufbx_open_file",
+    "ufbx_open_memory",
+    "ufbx_default_open_file",
 }
 
 override_functions = { }
 override_member_functions = { }
 
 override_functions["ufbx_find_real_len"] = """
-pub fn find_real(props: &Props, name: &str) -> Option<Real> {
-    find_prop(props, name).map(|p| p.value_vec3.x)
-}
-"""
-
-override_functions["ufbx_find_vec3_len"] = """
-pub fn find_vec3(props: &Props, name: &str) -> Option<Vec3> {
-    find_prop(props, name).map(|p| p.value_vec3)
-}
+// TODO: Property find functions
 """
 
 override_functions["ufbx_find_int_len"] = """
-pub fn find_int(props: &Props, name: &str) -> Option<i64> {
-    find_prop(props, name).map(|p| p.value_int)
-}
+// TODO: Property find functions
 """
 
 override_functions["ufbx_find_bool_len"] = """
-pub fn find_bool(props: &Props, name: &str) -> Option<bool> {
-    find_prop(props, name).map(|p| p.value_int != 0)
-}
+// TODO: Property find functions
+"""
+
+override_functions["ufbx_find_vec3_len"] = """
+// TODO: Property find functions
 """
 
 override_functions["ufbx_find_string_len"] = """
-pub fn find_string<'a>(props: &'a Props, name: &str) -> Option<&'a str> {
-    find_prop(props, name).map(|p| p.value_str.as_ref())
-}
+// TODO: Property find functions
+"""
+
+override_functions["ufbx_find_prop_concat"] = """
+// TODO: ufbx_find_prop_concat()
 """
 
 override_functions["ufbx_find_shader_prop_len"] = """
@@ -241,33 +279,23 @@ pub fn evaluate_props<'a, 'b>(anim: &'a Anim, element: &'a Element, time: f64, b
 """
 
 override_member_functions["ufbx_find_real_len"] = """
-pub fn find_real(self: &Props, name: &str) -> Option<Real> {
-    find_real(self, name)
-}
+// TODO: find_real()
 """
 
 override_member_functions["ufbx_find_vec3_len"] = """
-pub fn find_vec3(self: &Props, name: &str) -> Option<Vec3> {
-    find_vec3(self, name)
-}
+// TODO: find_vec3()
 """
 
 override_member_functions["ufbx_find_int_len"] = """
-pub fn find_int(self: &Props, name: &str) -> Option<i64> {
-    find_int(self, name)
-}
+// TODO: find_int()
 """
 
 override_member_functions["ufbx_find_bool_len"] = """
-pub fn find_bool(self: &Props, name: &str) -> Option<bool> {
-    find_bool(self, name)
-}
+// TODO: find_bool()
 """
 
 override_member_functions["ufbx_find_string_len"] = """
-pub fn find_string<'a>(self: &'a Props, name: &str) -> Option<&'a str> {
-    find_string(self, name)
-}
+// TODO: find_string()
 """
 
 override_member_functions["ufbx_find_shader_prop_len"] = """
@@ -392,6 +420,8 @@ class RustType:
                 return f"*const {self.inner.fmt_raw()}"
             else:
                 return f"*mut {self.inner.fmt_raw()}"
+        elif self.kind == "unsafe":
+            return self.inner.fmt_raw()
         else:
             return self.name
 
@@ -407,6 +437,8 @@ class RustType:
         elif self.kind == "array":
             num = self.ir.array_length
             return f"[{self.inner.fmt_member(lifetime)}; {num}]"
+        elif self.kind == "unsafe":
+            return self.inner.fmt_member(lifetime)
         elif self.kind == "pointer":
             lt = f"'{lifetime}, " if lifetime else ""
             if self.ir.inner == "void":
@@ -464,6 +496,9 @@ class RustType:
         elif self.is_synthetic and self.name == "RawString":
             lt = f"'{lifetime} " if lifetime else ""
             return f"Option<&{lt}str>"
+        elif self.is_synthetic and self.name == "RawBlob":
+            lt = f"'{lifetime} " if lifetime else ""
+            return f"Option<&{lt}[u8]>"
         elif self.kind == "array":
             num = self.ir.array_length
             return f"[{self.inner.fmt_input(lifetime)}; {num}]"
@@ -475,6 +510,8 @@ class RustType:
                 return f"OptionRef<{self.inner.fmt_input(lifetime)}>"
             else:
                 return f"Ref<{self.inner.fmt_input(lifetime)}>"
+        elif self.kind == "unsafe":
+            return f"Unsafe<{self.inner.fmt_input(lifetime)}>"
         elif self.kind == "struct":
             rs = structs[self.ir.key]
             if rs.ir.is_input or rs.ir.is_interface:
@@ -520,6 +557,7 @@ class RustStruct:
         self.name = get_struct_name(st)
         self.rust_name = get_struct_rust_name(st)
         self.is_raw = False
+        self.has_inline_bufs = False
 
 class RustEnumValue:
     def __init__(self, ev: ir.EnumValue):
@@ -647,6 +685,16 @@ def init_fields(rs: RustStruct, field: ir.Field):
         rt = RustType(None, None)
         rt.name = "RawString"
         rt.is_synthetic = True
+    elif rs.ir.is_input and rt.ir.key == "ufbx_blob":
+        rt = RustType(None, None)
+        rt.name = "RawBlob"
+        rt.is_synthetic = True
+    elif field.kind == "inlineBuf":
+        rt = RustType(None, rt)
+        rt.name = f"InlineBuf<[{rt.inner.inner.name}; {rt.inner.ir.array_length}]>"
+        rt.is_synthetic = True
+        field.name = f"{field.name}_buf"
+        rs.has_inline_bufs = True
 
     rs.fields.append(RustField(field, rt))
 
@@ -758,12 +806,14 @@ def emit_struct(rs: RustStruct):
         emit(f"#[derive(Clone, Copy)]")
     if rs.ir.name in default_derive_types or rs.ir.is_pod or rs.ir.is_input:
         emit(f"#[derive(Default)]")
+    if rs.ir.is_pod:
+        emit(f"#[derive(Debug)]")
     emit(f"pub struct {rs.name}{lifetime} {{")
     indent()
 
     for field in rs.fields:
         prefix = ""
-        if not field.ir.private or rs.ir.is_input:
+        if (not field.ir.private and field.ir.kind not in ("inlineBuf", "inlineBufLength")) or rs.ir.is_input:
             prefix = "pub "
         lifetime = "a"
 
@@ -800,6 +850,34 @@ def emit_struct(rs: RustStruct):
         emit(f"&self.values[self.indices[index] as usize]")
         unindent()
         emit("}")
+        unindent()
+        emit("}")
+
+    if rs.has_inline_bufs:
+        emit()
+        emit(f"impl {rs.name} {{")
+        indent()
+        for field in rs.fields:
+            if field.ir.kind != "inlineBuf": continue
+            assert field.name.endswith("_buf")
+            irt = field.type.inner.inner
+            n = field.type.inner.ir.array_length
+            base_name = field.name[:-4]
+            len_name = ""
+            for len_field in rs.fields:
+                if len_field.ir.kind == "inlineBufLength" and len_field.name.startswith(base_name):
+                    len_name = len_field.name
+                    break
+            emit(f"pub fn {base_name}(&self) -> &str {{")
+            indent()
+            emit("unsafe {")
+            indent()
+            emit(f"let buf: &[mem::MaybeUninit<{irt.name}>; {n}] = mem::transmute(&self.{base_name}_buf);")
+            emit(f"str::from_utf8(mem::transmute(&buf[..self.{len_name}])).unwrap()")
+            unindent()
+            emit("}")
+            unindent()
+            emit("}")
         unindent()
         emit("}")
 
@@ -867,7 +945,7 @@ def emit_input_struct(rs: RustStruct):
         if field.ir.private: continue
         if field.type.kind == "struct":
             frs = structs[field.type.ir.key]
-            if frs.ir.is_callback or frs.ir.name == "ufbx_string":
+            if frs.ir.is_callback or frs.ir.name in ("ufbx_string", "ufbx_blob"):
                 needs_lifetime = True
 
     if needs_lifetime:
@@ -891,7 +969,7 @@ def emit_input_struct(rs: RustStruct):
     emit(f"impl {rs.name} {{")
     indent()
 
-    emit(f"fn from_rust(arg: &mut {rs.rust_name}) -> Self {{")
+    emit(f"pub fn from_rust(arg: &mut {rs.rust_name}) -> Self {{")
     indent()
     emit(f"{rs.name} {{")
     indent()
@@ -906,11 +984,13 @@ def emit_input_struct(rs: RustStruct):
             frs = structs[field.type.ir.key]
             if frs.ir.is_callback or frs.ir.is_input or frs.ir.is_interface:
                 has_from = True
-        elif field.type.name == "RawString":
+        elif field.type.name in ("RawString", "RawBlob"):
             has_from = True
 
         if has_from:
             emit(f"{field.name}: {field.type.name}::from_rust(&mut arg.{field.name}),")
+        elif field.type.kind == "unsafe":
+            emit(f"{field.name}: arg.{field.name}.take(),")
         else:
             emit(f"{field.name}: arg.{field.name},")
 
@@ -928,10 +1008,24 @@ def emit_flag(re: RustEnum):
     emit(f"pub struct {re.name}(u32);")
     emit(f"impl {re.name} {{")
     indent()
+    emit(f"pub const NONE: {re.name} = {re.name}(0);")
+    num_values = 0
     for value in re.values:
+        if value.ir.auxiliary: continue
         emit(f"pub const {value.name}: {re.name} = {re.name}(0x{value.value:x});")
+        num_values += 1
     unindent()
     emit("}")
+
+    emit()
+    names_name = f"{re.name.upper()}_NAMES"
+    emit(f"const {names_name}: [(&'static str, u32); {num_values}] = [")
+    indent()
+    for value in re.values:
+        if value.ir.auxiliary: continue
+        emit(f"(\"{value.name}\", 0x{value.value:x}),")
+    unindent()
+    emit("];")
 
     emit()
     emit(f"impl {re.name} {{")
@@ -945,6 +1039,16 @@ def emit_flag(re: RustEnum):
     emit(f"impl Default for {re.name} {{")
     indent()
     emit(f"fn default() -> Self {{ Self(0) }}")
+    unindent()
+    emit("}")
+
+    emit(f"impl Debug for {re.name} {{")
+    indent()
+    emit("fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {")
+    indent()
+    emit(f"format_flags(f, &{names_name}, self.0)")
+    unindent()
+    emit("}")
     unindent()
     emit("}")
 
@@ -1133,13 +1237,7 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
             emit(f"let mut error: Error = Error::default();")
             arg_pass.append("&mut error")
         if rf.ir.has_panic:
-            emit(f"let mut panic: Panic = Panic{{")
-            indent()
-            emit("did_panic: false,")
-            emit("message_length: 0,")
-            emit(f"message: unsafe {{ mem::MaybeUninit::uninit().assume_init() }},")
-            unindent()
-            emit("};")
+            emit(f"let mut panic: Panic = Default::default();")
             arg_pass.insert(0, "&mut panic")
 
         arg_pass_str = ", ".join(arg_pass)
@@ -1151,7 +1249,7 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
         if rf.ir.has_panic:
             emit(f"if panic.did_panic {{")
             indent()
-            emit(f"panic!(\"ufbx::{rf.name}() {{}}\", unsafe {{ str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) }});")
+            emit(f"panic!(\"ufbx::{rf.name}() {{}}\", panic.message());")
             unindent()
             emit("}")
         if rf.ir.has_error:
@@ -1189,7 +1287,7 @@ def emit_global(gl: ir.Global):
     typ = file.types[gl.type]
     if typ.kind != "const": return
     typ = file.types[typ.inner]
-    if typ.base_name == "ufbx_string": return
+    if typ.base_name in ("ufbx_string", "ufbx_blob"): return
 
     gt = fmt_ffi_type(typ, "")
     name = get_global_name(gl)
@@ -1212,7 +1310,7 @@ def emit_struct_impl(rs: RustStruct):
         typ = file.types[gl.type]
         if typ.kind != "const": continue
         typ = file.types[typ.inner]
-        if typ.base_name == "ufbx_string": continue
+        if typ.base_name in ("ufbx_string", "ufbx_blob"): continue
         member_globals.append((mg, gl, typ))
 
     if not members and not member_globals: return

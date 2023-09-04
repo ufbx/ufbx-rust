@@ -1,12 +1,14 @@
 use std::ffi::{c_void};
-use std::{marker, result, ptr, mem, str, slice};
+use std::{marker, result, ptr, mem, str};
+use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, Unsafe, ExternalRef};
-use crate::prelude::{Allocator, Stream, call_open_file_cb, call_progress_cb};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, format_flags};
+use crate::prelude::{Allocator, Stream, call_open_file_cb, call_close_memory_cb, call_progress_cb};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Vec2 {
     pub x: Real,
     pub y: Real,
@@ -15,6 +17,7 @@ pub struct Vec2 {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Vec3 {
     pub x: Real,
     pub y: Real,
@@ -24,6 +27,7 @@ pub struct Vec3 {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Vec4 {
     pub x: Real,
     pub y: Real,
@@ -34,6 +38,7 @@ pub struct Vec4 {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Quat {
     pub x: Real,
     pub y: Real,
@@ -60,6 +65,7 @@ impl Default for RotationOrder {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Transform {
     pub translation: Vec3,
     pub rotation: Quat,
@@ -69,6 +75,7 @@ pub struct Transform {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Matrix {
     pub m00: Real,
     pub m10: Real,
@@ -92,6 +99,40 @@ pub struct VoidList {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DomValueType {
+    Number = 0,
+    String = 1,
+    ArrayI8 = 2,
+    ArrayI32 = 3,
+    ArrayI64 = 4,
+    ArrayF32 = 5,
+    ArrayF64 = 6,
+    ArrayRawString = 7,
+    ArrayIgnored = 8,
+}
+
+impl Default for DomValueType {
+    fn default() -> Self { Self::Number }
+}
+
+#[repr(C)]
+pub struct DomValue {
+    pub type_: DomValueType,
+    pub value_str: String,
+    pub value_blob: Blob,
+    pub value_int: i64,
+    pub value_float: f64,
+}
+
+#[repr(C)]
+pub struct DomNode {
+    pub name: String,
+    pub children: RefList<DomNode>,
+    pub values: List<DomValue>,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PropType {
     Unknown = 0,
     Boolean = 1,
@@ -99,14 +140,16 @@ pub enum PropType {
     Number = 3,
     Vector = 4,
     Color = 5,
-    String = 6,
-    DateTime = 7,
-    Translation = 8,
-    Rotation = 9,
-    Scaling = 10,
-    Distance = 11,
-    Compound = 12,
-    NumPropTypes = 13,
+    ColorWithAlpha = 6,
+    String = 7,
+    DateTime = 8,
+    Translation = 9,
+    Rotation = 10,
+    Scaling = 11,
+    Distance = 12,
+    Compound = 13,
+    Blob = 14,
+    Reference = 15,
 }
 
 impl Default for PropType {
@@ -117,6 +160,7 @@ impl Default for PropType {
 #[derive(Clone, Copy)]
 pub struct PropFlags(u32);
 impl PropFlags {
+    pub const NONE: PropFlags = PropFlags(0);
     pub const ANIMATABLE: PropFlags = PropFlags(0x1);
     pub const USER_DEFINED: PropFlags = PropFlags(0x2);
     pub const HIDDEN: PropFlags = PropFlags(0x4);
@@ -134,7 +178,41 @@ impl PropFlags {
     pub const CONNECTED: PropFlags = PropFlags(0x8000);
     pub const NO_VALUE: PropFlags = PropFlags(0x10000);
     pub const OVERRIDDEN: PropFlags = PropFlags(0x20000);
+    pub const VALUE_REAL: PropFlags = PropFlags(0x100000);
+    pub const VALUE_VEC2: PropFlags = PropFlags(0x200000);
+    pub const VALUE_VEC3: PropFlags = PropFlags(0x400000);
+    pub const VALUE_VEC4: PropFlags = PropFlags(0x800000);
+    pub const VALUE_INT: PropFlags = PropFlags(0x1000000);
+    pub const VALUE_STR: PropFlags = PropFlags(0x2000000);
+    pub const VALUE_BLOB: PropFlags = PropFlags(0x4000000);
 }
+
+const PROPFLAGS_NAMES: [(&'static str, u32); 24] = [
+    ("ANIMATABLE", 0x1),
+    ("USER_DEFINED", 0x2),
+    ("HIDDEN", 0x4),
+    ("LOCK_X", 0x10),
+    ("LOCK_Y", 0x20),
+    ("LOCK_Z", 0x40),
+    ("LOCK_W", 0x80),
+    ("MUTE_X", 0x100),
+    ("MUTE_Y", 0x200),
+    ("MUTE_Z", 0x400),
+    ("MUTE_W", 0x800),
+    ("SYNTHETIC", 0x1000),
+    ("ANIMATED", 0x2000),
+    ("NOT_FOUND", 0x4000),
+    ("CONNECTED", 0x8000),
+    ("NO_VALUE", 0x10000),
+    ("OVERRIDDEN", 0x20000),
+    ("VALUE_REAL", 0x100000),
+    ("VALUE_VEC2", 0x200000),
+    ("VALUE_VEC3", 0x400000),
+    ("VALUE_VEC4", 0x800000),
+    ("VALUE_INT", 0x1000000),
+    ("VALUE_STR", 0x2000000),
+    ("VALUE_BLOB", 0x4000000),
+];
 
 impl PropFlags {
     pub fn any(self) -> bool { self.0 != 0 }
@@ -143,6 +221,11 @@ impl PropFlags {
 }
 impl Default for PropFlags {
     fn default() -> Self { Self(0) }
+}
+impl Debug for PropFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_flags(f, &PROPFLAGS_NAMES, self.0)
+    }
 }
 impl BitAnd for PropFlags {
     type Output = Self;
@@ -173,8 +256,9 @@ pub struct Prop {
     pub type_: PropType,
     pub flags: PropFlags,
     pub value_str: String,
+    pub value_blob: Blob,
     pub value_int: i64,
-    pub value_vec3: Vec3,
+    pub value_vec4: Vec4,
 }
 
 #[repr(C)]
@@ -202,30 +286,31 @@ pub enum ElementType {
     ProceduralGeometry = 12,
     StereoCamera = 13,
     CameraSwitcher = 14,
-    LodGroup = 15,
-    SkinDeformer = 16,
-    SkinCluster = 17,
-    BlendDeformer = 18,
-    BlendChannel = 19,
-    BlendShape = 20,
-    CacheDeformer = 21,
-    CacheFile = 22,
-    Material = 23,
-    Texture = 24,
-    Video = 25,
-    Shader = 26,
-    ShaderBinding = 27,
-    AnimStack = 28,
-    AnimLayer = 29,
-    AnimValue = 30,
-    AnimCurve = 31,
-    DisplayLayer = 32,
-    SelectionSet = 33,
-    SelectionNode = 34,
-    Character = 35,
-    Constraint = 36,
-    Pose = 37,
-    MetadataObject = 38,
+    Marker = 15,
+    LodGroup = 16,
+    SkinDeformer = 17,
+    SkinCluster = 18,
+    BlendDeformer = 19,
+    BlendChannel = 20,
+    BlendShape = 21,
+    CacheDeformer = 22,
+    CacheFile = 23,
+    Material = 24,
+    Texture = 25,
+    Video = 26,
+    Shader = 27,
+    ShaderBinding = 28,
+    AnimStack = 29,
+    AnimLayer = 30,
+    AnimValue = 31,
+    AnimCurve = 32,
+    DisplayLayer = 33,
+    SelectionSet = 34,
+    SelectionNode = 35,
+    Character = 36,
+    Constraint = 37,
+    Pose = 38,
+    MetadataObject = 39,
 }
 
 impl Default for ElementType {
@@ -250,6 +335,7 @@ pub struct Element {
     pub type_: ElementType,
     pub connections_src: List<Connection>,
     pub connections_dst: List<Connection>,
+    pub dom_node: Option<Ref<DomNode>>,
     pub scene: Ref<Scene>,
 }
 
@@ -281,8 +367,8 @@ pub struct Node {
     pub mesh: Option<Ref<Mesh>>,
     pub light: Option<Ref<Light>>,
     pub camera: Option<Ref<Camera>>,
-    pub bone: Option<Ref<Bone>>,
     pub attrib: Option<Ref<Element>>,
+    pub geometry_transform_helper: Option<Ref<Node>>,
     pub attrib_type: ElementType,
     pub all_attribs: RefList<Element>,
     pub inherit_type: InheritType,
@@ -295,8 +381,15 @@ pub struct Node {
     pub node_to_world: Matrix,
     pub geometry_to_node: Matrix,
     pub geometry_to_world: Matrix,
+    pub adjust_pre_rotation: Quat,
+    pub adjust_pre_scale: Vec3,
+    pub adjust_post_rotation: Quat,
+    pub materials: RefList<Material>,
     pub visible: bool,
     pub is_root: bool,
+    pub has_geometry_transform: bool,
+    pub has_adjust_transform: bool,
+    pub is_geometry_transform_helper: bool,
     pub node_depth: u32,
 }
 
@@ -304,7 +397,7 @@ pub struct Node {
 pub struct VertexAttrib {
     pub exists: bool,
     pub values: VoidList,
-    pub indices: List<i32>,
+    pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
 }
@@ -313,7 +406,7 @@ pub struct VertexAttrib {
 pub struct VertexReal {
     pub exists: bool,
     pub values: List<Real>,
-    pub indices: List<i32>,
+    pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
 }
@@ -329,7 +422,7 @@ impl Index<usize> for VertexReal {
 pub struct VertexVec2 {
     pub exists: bool,
     pub values: List<Vec2>,
-    pub indices: List<i32>,
+    pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
 }
@@ -345,7 +438,7 @@ impl Index<usize> for VertexVec2 {
 pub struct VertexVec3 {
     pub exists: bool,
     pub values: List<Vec3>,
-    pub indices: List<i32>,
+    pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
 }
@@ -361,7 +454,7 @@ impl Index<usize> for VertexVec3 {
 pub struct VertexVec4 {
     pub exists: bool,
     pub values: List<Vec4>,
-    pub indices: List<i32>,
+    pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
 }
@@ -376,7 +469,7 @@ impl Index<usize> for VertexVec4 {
 #[repr(C)]
 pub struct UvSet {
     pub name: String,
-    pub index: i32,
+    pub index: u32,
     pub vertex_uv: VertexVec2,
     pub vertex_tangent: VertexVec3,
     pub vertex_bitangent: VertexVec3,
@@ -385,13 +478,14 @@ pub struct UvSet {
 #[repr(C)]
 pub struct ColorSet {
     pub name: String,
-    pub index: i32,
+    pub index: u32,
     pub vertex_color: VertexVec4,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Edge {
     pub indices: [u32; 2],
 }
@@ -399,6 +493,7 @@ pub struct Edge {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Face {
     pub index_begin: u32,
     pub num_indices: u32,
@@ -409,7 +504,43 @@ pub struct MeshMaterial {
     pub material: Option<Ref<Material>>,
     pub num_faces: usize,
     pub num_triangles: usize,
-    pub face_indices: List<i32>,
+    pub num_empty_faces: usize,
+    pub num_point_faces: usize,
+    pub num_line_faces: usize,
+    pub face_indices: List<u32>,
+}
+
+#[repr(C)]
+pub struct FaceGroup {
+    pub id: i32,
+    pub name: String,
+    pub num_faces: usize,
+    pub num_triangles: usize,
+    pub face_indices: List<u32>,
+}
+
+#[repr(C)]
+pub struct SubdivisionWeightRange {
+    pub weight_begin: u32,
+    pub num_weights: u32,
+}
+
+#[repr(C)]
+pub struct SubdivisionWeight {
+    pub weight: Real,
+    pub index: u32,
+}
+
+#[repr(C)]
+pub struct SubdivisionResult {
+    pub result_memory_used: usize,
+    pub temp_memory_used: usize,
+    pub result_allocs: usize,
+    pub temp_allocs: usize,
+    pub source_vertex_ranges: List<SubdivisionWeightRange>,
+    pub source_vertex_weights: List<SubdivisionWeight>,
+    pub skin_cluster_ranges: List<SubdivisionWeightRange>,
+    pub skin_cluster_weights: List<SubdivisionWeight>,
 }
 
 #[repr(u32)]
@@ -430,8 +561,8 @@ impl Default for SubdivisionDisplayMode {
 pub enum SubdivisionBoundary {
     Default = 0,
     Legacy = 1,
-    SharpNone = 2,
-    SharpCorners = 3,
+    SharpCorners = 2,
+    SharpNone = 3,
     SharpBoundary = 4,
     SharpInterior = 5,
 }
@@ -448,17 +579,22 @@ pub struct Mesh {
     pub num_faces: usize,
     pub num_triangles: usize,
     pub num_edges: usize,
+    pub max_face_triangles: usize,
+    pub num_empty_faces: usize,
+    pub num_point_faces: usize,
+    pub num_line_faces: usize,
     pub faces: List<Face>,
     pub face_smoothing: List<bool>,
-    pub face_material: List<i32>,
-    pub max_face_triangles: usize,
-    pub num_bad_faces: usize,
+    pub face_material: List<u32>,
+    pub face_group: List<u32>,
+    pub face_hole: List<bool>,
     pub edges: List<Edge>,
     pub edge_smoothing: List<bool>,
     pub edge_crease: List<Real>,
-    pub vertex_indices: List<i32>,
+    pub edge_visibility: List<bool>,
+    pub vertex_indices: List<u32>,
     pub vertices: List<Vec3>,
-    pub vertex_first_index: List<i32>,
+    pub vertex_first_index: List<u32>,
     pub vertex_position: VertexVec3,
     pub vertex_normal: VertexVec3,
     pub vertex_uv: VertexVec2,
@@ -469,6 +605,7 @@ pub struct Mesh {
     pub uv_sets: List<UvSet>,
     pub color_sets: List<ColorSet>,
     pub materials: List<MeshMaterial>,
+    pub face_groups: List<FaceGroup>,
     pub skinned_is_local: bool,
     pub skinned_position: VertexVec3,
     pub skinned_normal: VertexVec3,
@@ -476,12 +613,14 @@ pub struct Mesh {
     pub blend_deformers: RefList<BlendDeformer>,
     pub cache_deformers: RefList<CacheDeformer>,
     pub all_deformers: RefList<Element>,
-    pub subdivision_preview_levels: i32,
-    pub subdivision_render_levels: i32,
+    pub subdivision_preview_levels: u32,
+    pub subdivision_render_levels: u32,
     pub subdivision_display_mode: SubdivisionDisplayMode,
     pub subdivision_boundary: SubdivisionBoundary,
     pub subdivision_uv_boundary: SubdivisionBoundary,
+    pub generated_normals: bool,
     pub subdivision_evaluated: bool,
+    pub subdivision_result: Option<Ref<SubdivisionResult>>,
     pub from_tessellated_nurbs: bool,
 }
 
@@ -536,6 +675,17 @@ pub struct Light {
     pub outer_angle: Real,
     pub cast_light: bool,
     pub cast_shadows: bool,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProjectionMode {
+    Perspective = 0,
+    Orthographic = 1,
+}
+
+impl Default for ProjectionMode {
+    fn default() -> Self { Self::Perspective }
 }
 
 #[repr(u32)]
@@ -601,13 +751,47 @@ impl Default for ApertureFormat {
     fn default() -> Self { Self::Custom }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CoordinateAxis {
+    PositiveX = 0,
+    NegativeX = 1,
+    PositiveY = 2,
+    NegativeY = 3,
+    PositiveZ = 4,
+    NegativeZ = 5,
+    Unknown = 6,
+}
+
+impl Default for CoordinateAxis {
+    fn default() -> Self { Self::PositiveX }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[derive(Default)]
+#[derive(Debug)]
+pub struct CoordinateAxes {
+    pub right: CoordinateAxis,
+    pub up: CoordinateAxis,
+    pub front: CoordinateAxis,
+}
+
 #[repr(C)]
 pub struct Camera {
     pub element: Element,
+    pub projection_mode: ProjectionMode,
     pub resolution_is_pixels: bool,
     pub resolution: Vec2,
     pub field_of_view_deg: Vec2,
     pub field_of_view_tan: Vec2,
+    pub orthographic_extent: Real,
+    pub orthographic_size: Vec2,
+    pub projection_plane: Vec2,
+    pub aspect_ratio: Real,
+    pub near_plane: Real,
+    pub far_plane: Real,
+    pub projection_axes: CoordinateAxes,
     pub aspect_mode: AspectMode,
     pub aperture_mode: ApertureMode,
     pub gate_fit: GateFit,
@@ -629,6 +813,22 @@ pub struct Bone {
 #[repr(C)]
 pub struct Empty {
     pub element: Element,
+}
+
+#[repr(C)]
+pub struct LineSegment {
+    pub index_begin: u32,
+    pub num_indices: u32,
+}
+
+#[repr(C)]
+pub struct LineCurve {
+    pub element: Element,
+    pub color: Vec3,
+    pub control_points: List<Vec3>,
+    pub point_indices: List<u32>,
+    pub segments: List<LineSegment>,
+    pub from_tessellated_nurbs: bool,
 }
 
 #[repr(u32)]
@@ -657,21 +857,6 @@ pub struct NurbsBasis {
 }
 
 #[repr(C)]
-pub struct LineSegment {
-    pub index_begin: u32,
-    pub num_indices: u32,
-}
-
-#[repr(C)]
-pub struct LineCurve {
-    pub element: Element,
-    pub color: Vec3,
-    pub control_points: List<Vec3>,
-    pub point_indices: List<i32>,
-    pub segments: List<LineSegment>,
-}
-
-#[repr(C)]
 pub struct NurbsCurve {
     pub element: Element,
     pub basis: NurbsBasis,
@@ -686,8 +871,8 @@ pub struct NurbsSurface {
     pub num_control_points_u: usize,
     pub num_control_points_v: usize,
     pub control_points: List<Vec4>,
-    pub span_subdivision_u: i32,
-    pub span_subdivision_v: i32,
+    pub span_subdivision_u: u32,
+    pub span_subdivision_v: u32,
     pub flip_normals: bool,
     pub material: Option<Ref<Material>>,
 }
@@ -721,6 +906,24 @@ pub struct CameraSwitcher {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarkerType {
+    Unknown = 0,
+    FkEffector = 1,
+    IkEffector = 2,
+}
+
+impl Default for MarkerType {
+    fn default() -> Self { Self::Unknown }
+}
+
+#[repr(C)]
+pub struct Marker {
+    pub element: Element,
+    pub type_: MarkerType,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LodDisplay {
     UseLod = 0,
     Show = 1,
@@ -734,6 +937,7 @@ impl Default for LodDisplay {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct LodLevel {
     pub distance: Real,
     pub display: LodDisplay,
@@ -766,6 +970,7 @@ impl Default for SkinningMethod {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct SkinVertex {
     pub weight_begin: u32,
     pub num_weights: u32,
@@ -775,6 +980,7 @@ pub struct SkinVertex {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct SkinWeight {
     pub cluster_index: u32,
     pub weight: Real,
@@ -789,7 +995,7 @@ pub struct SkinDeformer {
     pub weights: List<SkinWeight>,
     pub max_weights_per_vertex: usize,
     pub num_dq_weights: usize,
-    pub dq_vertices: List<i32>,
+    pub dq_vertices: List<u32>,
     pub dq_weights: List<Real>,
 }
 
@@ -803,7 +1009,7 @@ pub struct SkinCluster {
     pub geometry_to_world: Matrix,
     pub geometry_to_world_transform: Transform,
     pub num_weights: usize,
-    pub vertices: List<i32>,
+    pub vertices: List<u32>,
     pub weights: List<Real>,
 }
 
@@ -825,13 +1031,14 @@ pub struct BlendChannel {
     pub element: Element,
     pub weight: Real,
     pub keyframes: List<BlendKeyframe>,
+    pub target_shape: Ref<BlendShape>,
 }
 
 #[repr(C)]
 pub struct BlendShape {
     pub element: Element,
     pub num_offsets: usize,
-    pub offset_vertices: List<i32>,
+    pub offset_vertices: List<u32>,
     pub position_offsets: List<Vec3>,
     pub normal_offsets: List<Vec3>,
 }
@@ -878,8 +1085,9 @@ impl Default for CacheDataEncoding {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CacheInterpretation {
     Unknown = 0,
-    VertexPosition = 1,
-    VertexNormal = 2,
+    Points = 1,
+    VertexPosition = 2,
+    VertexNormal = 3,
 }
 
 impl Default for CacheInterpretation {
@@ -931,16 +1139,28 @@ pub struct CacheFile {
     pub filename: String,
     pub absolute_filename: String,
     pub relative_filename: String,
+    pub raw_filename: Blob,
+    pub raw_absolute_filename: Blob,
+    pub raw_relative_filename: Blob,
     pub format: CacheFileFormat,
     pub external_cache: Option<Ref<GeometryCache>>,
 }
 
 #[repr(C)]
 pub struct MaterialMap {
-    pub has_value: bool,
-    pub value: Vec3,
+    pub value_vec4: Vec4,
     pub value_int: i64,
     pub texture: Option<Ref<Texture>>,
+    pub has_value: bool,
+    pub texture_enabled: bool,
+    pub feature_disabled: bool,
+    pub value_components: i32,
+}
+
+#[repr(C)]
+pub struct MaterialFeatureInfo {
+    pub enabled: bool,
+    pub is_explicit: bool,
 }
 
 #[repr(C)]
@@ -956,9 +1176,15 @@ pub enum ShaderType {
     Unknown = 0,
     FbxLambert = 1,
     FbxPhong = 2,
-    OslStandard = 3,
-    Arnold = 4,
-    BlenderPhong = 5,
+    OslStandardSurface = 3,
+    ArnoldStandardSurface = 4,
+    E3DsMaxPhysicalMaterial = 5,
+    E3DsMaxPbrMetalRough = 6,
+    E3DsMaxPbrSpecGloss = 7,
+    GltfMaterial = 8,
+    ShaderfxGraph = 9,
+    BlenderPhong = 10,
+    WavefrontMtl = 11,
 }
 
 impl Default for ShaderType {
@@ -1000,7 +1226,7 @@ pub enum MaterialPbrMap {
     BaseFactor = 0,
     BaseColor = 1,
     Roughness = 2,
-    Metallic = 3,
+    Metalness = 3,
     DiffuseRoughness = 4,
     SpecularFactor = 5,
     SpecularColor = 6,
@@ -1014,44 +1240,80 @@ pub enum MaterialPbrMap {
     TransmissionScatterAnisotropy = 14,
     TransmissionDispersion = 15,
     TransmissionRoughness = 16,
-    TransmissionPriority = 17,
-    TransmissionEnableInAov = 18,
-    SubsurfaceFactor = 19,
-    SubsurfaceColor = 20,
-    SubsurfaceRadius = 21,
-    SubsurfaceScale = 22,
-    SubsurfaceAnisotropy = 23,
-    SubsurfaceType = 24,
-    SheenFactor = 25,
-    SheenColor = 26,
-    SheenRoughness = 27,
-    CoatFactor = 28,
-    CoatColor = 29,
-    CoatRoughness = 30,
-    CoatIor = 31,
-    CoatAnisotropy = 32,
-    CoatRotation = 33,
-    CoatNormal = 34,
-    ThinFilmThickness = 35,
-    ThinFilmIor = 36,
-    EmissionFactor = 37,
-    EmissionColor = 38,
-    Opacity = 39,
-    IndirectDiffuse = 40,
-    IndirectSpecular = 41,
-    NormalMap = 42,
-    TangentMap = 43,
-    MatteEnabled = 44,
-    MatteFactor = 45,
-    MatteColor = 46,
-    ThinWalled = 47,
-    Caustics = 48,
-    ExitToBackground = 49,
-    InternalReflections = 50,
+    TransmissionExtraRoughness = 17,
+    TransmissionPriority = 18,
+    TransmissionEnableInAov = 19,
+    SubsurfaceFactor = 20,
+    SubsurfaceColor = 21,
+    SubsurfaceRadius = 22,
+    SubsurfaceScale = 23,
+    SubsurfaceAnisotropy = 24,
+    SubsurfaceTintColor = 25,
+    SubsurfaceType = 26,
+    SheenFactor = 27,
+    SheenColor = 28,
+    SheenRoughness = 29,
+    CoatFactor = 30,
+    CoatColor = 31,
+    CoatRoughness = 32,
+    CoatIor = 33,
+    CoatAnisotropy = 34,
+    CoatRotation = 35,
+    CoatNormal = 36,
+    CoatAffectBaseColor = 37,
+    CoatAffectBaseRoughness = 38,
+    ThinFilmThickness = 39,
+    ThinFilmIor = 40,
+    EmissionFactor = 41,
+    EmissionColor = 42,
+    Opacity = 43,
+    IndirectDiffuse = 44,
+    IndirectSpecular = 45,
+    NormalMap = 46,
+    TangentMap = 47,
+    DisplacementMap = 48,
+    MatteFactor = 49,
+    MatteColor = 50,
+    AmbientOcclusion = 51,
+    Glossiness = 52,
+    CoatGlossiness = 53,
+    TransmissionGlossiness = 54,
 }
 
 impl Default for MaterialPbrMap {
     fn default() -> Self { Self::BaseFactor }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MaterialFeature {
+    Pbr = 0,
+    Metalness = 1,
+    Diffuse = 2,
+    Specular = 3,
+    Emission = 4,
+    Transmission = 5,
+    Coat = 6,
+    Sheen = 7,
+    Opacity = 8,
+    AmbientOcclusion = 9,
+    Matte = 10,
+    Unlit = 11,
+    Ior = 12,
+    DiffuseRoughness = 13,
+    TransmissionRoughness = 14,
+    ThinWalled = 15,
+    Caustics = 16,
+    ExitToBackground = 17,
+    InternalReflections = 18,
+    DoubleSided = 19,
+    RoughnessAsGlossiness = 20,
+    CoatRoughnessAsGlossiness = 21,
+    TransmissionRoughnessAsGlossiness = 22,
+}
+
+impl Default for MaterialFeature {
+    fn default() -> Self { Self::Pbr }
 }
 
 #[repr(C)]
@@ -1083,7 +1345,7 @@ pub struct MaterialPbrMaps {
     pub base_factor: MaterialMap,
     pub base_color: MaterialMap,
     pub roughness: MaterialMap,
-    pub metallic: MaterialMap,
+    pub metalness: MaterialMap,
     pub diffuse_roughness: MaterialMap,
     pub specular_factor: MaterialMap,
     pub specular_color: MaterialMap,
@@ -1097,6 +1359,7 @@ pub struct MaterialPbrMaps {
     pub transmission_scatter_anisotropy: MaterialMap,
     pub transmission_dispersion: MaterialMap,
     pub transmission_roughness: MaterialMap,
+    pub transmission_extra_roughness: MaterialMap,
     pub transmission_priority: MaterialMap,
     pub transmission_enable_in_aov: MaterialMap,
     pub subsurface_factor: MaterialMap,
@@ -1104,6 +1367,7 @@ pub struct MaterialPbrMaps {
     pub subsurface_radius: MaterialMap,
     pub subsurface_scale: MaterialMap,
     pub subsurface_anisotropy: MaterialMap,
+    pub subsurface_tint_color: MaterialMap,
     pub subsurface_type: MaterialMap,
     pub sheen_factor: MaterialMap,
     pub sheen_color: MaterialMap,
@@ -1115,6 +1379,8 @@ pub struct MaterialPbrMaps {
     pub coat_anisotropy: MaterialMap,
     pub coat_rotation: MaterialMap,
     pub coat_normal: MaterialMap,
+    pub coat_affect_base_color: MaterialMap,
+    pub coat_affect_base_roughness: MaterialMap,
     pub thin_film_thickness: MaterialMap,
     pub thin_film_ior: MaterialMap,
     pub emission_factor: MaterialMap,
@@ -1124,13 +1390,40 @@ pub struct MaterialPbrMaps {
     pub indirect_specular: MaterialMap,
     pub normal_map: MaterialMap,
     pub tangent_map: MaterialMap,
-    pub matte_enabled: MaterialMap,
+    pub displacement_map: MaterialMap,
     pub matte_factor: MaterialMap,
     pub matte_color: MaterialMap,
-    pub thin_walled: MaterialMap,
-    pub caustics: MaterialMap,
-    pub exit_to_background: MaterialMap,
-    pub internal_reflections: MaterialMap,
+    pub ambient_occlusion: MaterialMap,
+    pub glossiness: MaterialMap,
+    pub coat_glossiness: MaterialMap,
+    pub transmission_glossiness: MaterialMap,
+}
+
+#[repr(C)]
+pub struct MaterialFeatures {
+    pub pbr: MaterialFeatureInfo,
+    pub metalness: MaterialFeatureInfo,
+    pub diffuse: MaterialFeatureInfo,
+    pub specular: MaterialFeatureInfo,
+    pub emission: MaterialFeatureInfo,
+    pub transmission: MaterialFeatureInfo,
+    pub coat: MaterialFeatureInfo,
+    pub sheen: MaterialFeatureInfo,
+    pub opacity: MaterialFeatureInfo,
+    pub ambient_occlusion: MaterialFeatureInfo,
+    pub matte: MaterialFeatureInfo,
+    pub unlit: MaterialFeatureInfo,
+    pub ior: MaterialFeatureInfo,
+    pub diffuse_roughness: MaterialFeatureInfo,
+    pub transmission_roughness: MaterialFeatureInfo,
+    pub thin_walled: MaterialFeatureInfo,
+    pub caustics: MaterialFeatureInfo,
+    pub exit_to_background: MaterialFeatureInfo,
+    pub internal_reflections: MaterialFeatureInfo,
+    pub double_sided: MaterialFeatureInfo,
+    pub roughness_as_glossiness: MaterialFeatureInfo,
+    pub coat_roughness_as_glossiness: MaterialFeatureInfo,
+    pub transmission_roughness_as_glossiness: MaterialFeatureInfo,
 }
 
 #[repr(C)]
@@ -1138,9 +1431,11 @@ pub struct Material {
     pub element: Element,
     pub fbx: MaterialFbxMaps,
     pub pbr: MaterialPbrMaps,
+    pub features: MaterialFeatures,
     pub shader_type: ShaderType,
     pub shader: Option<Ref<Shader>>,
     pub shading_model_name: String,
+    pub shader_prop_prefix: String,
     pub textures: List<MaterialTexture>,
 }
 
@@ -1150,6 +1445,7 @@ pub enum TextureType {
     File = 0,
     Layered = 1,
     Procedural = 2,
+    Shader = 3,
 }
 
 impl Default for TextureType {
@@ -1214,6 +1510,58 @@ pub struct TextureLayer {
     pub alpha: Real,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShaderTextureType {
+    Unknown = 0,
+    SelectOutput = 1,
+    Osl = 2,
+}
+
+impl Default for ShaderTextureType {
+    fn default() -> Self { Self::Unknown }
+}
+
+#[repr(C)]
+pub struct ShaderTextureInput {
+    pub name: String,
+    pub value_vec4: Vec4,
+    pub value_int: i64,
+    pub value_str: String,
+    pub value_blob: Blob,
+    pub texture: Option<Ref<Texture>>,
+    pub texture_output_index: i64,
+    pub texture_enabled: bool,
+    pub prop: Ref<Prop>,
+    pub texture_prop: Option<Ref<Prop>>,
+    pub texture_enabled_prop: Option<Ref<Prop>>,
+}
+
+#[repr(C)]
+pub struct ShaderTexture {
+    pub type_: ShaderTextureType,
+    pub shader_name: String,
+    pub shader_type_id: u64,
+    pub inputs: List<ShaderTextureInput>,
+    pub shader_source: String,
+    pub raw_shader_source: Blob,
+    pub main_texture: Ref<Texture>,
+    pub main_texture_output_index: i64,
+    pub prop_prefix: String,
+}
+
+#[repr(C)]
+pub struct TextureFile {
+    pub index: u32,
+    pub filename: String,
+    pub absolute_filename: String,
+    pub relative_filename: String,
+    pub raw_filename: Blob,
+    pub raw_absolute_filename: Blob,
+    pub raw_relative_filename: Blob,
+    pub content: Blob,
+}
+
 #[repr(C)]
 pub struct Texture {
     pub element: Element,
@@ -1221,13 +1569,21 @@ pub struct Texture {
     pub filename: String,
     pub absolute_filename: String,
     pub relative_filename: String,
+    pub raw_filename: Blob,
+    pub raw_absolute_filename: Blob,
+    pub raw_relative_filename: Blob,
     pub content: Blob,
     pub video: Option<Ref<Video>>,
+    pub file_index: u32,
+    pub has_file: bool,
     pub layers: List<TextureLayer>,
+    pub shader: Option<Ref<ShaderTexture>>,
+    pub file_textures: RefList<Texture>,
     pub uv_set: String,
     pub wrap_u: WrapMode,
     pub wrap_v: WrapMode,
-    pub transform: Transform,
+    pub has_uv_transform: bool,
+    pub uv_transform: Transform,
     pub texture_to_uv: Matrix,
     pub uv_to_texture: Matrix,
 }
@@ -1238,6 +1594,9 @@ pub struct Video {
     pub filename: String,
     pub absolute_filename: String,
     pub relative_filename: String,
+    pub raw_filename: Blob,
+    pub raw_absolute_filename: Blob,
+    pub raw_relative_filename: Blob,
     pub content: Blob,
 }
 
@@ -1261,26 +1620,24 @@ pub struct ShaderBinding {
 }
 
 #[repr(C)]
-pub struct AnimLayerDesc {
-    pub layer: Ref<AnimLayer>,
-    pub weight: Real,
-}
-
-#[repr(C)]
 pub struct PropOverride {
     pub element_id: u32,
-    pub prop_name: Ref<u8>,
-    pub value: Vec3,
-    pub value_str: Ref<u8>,
-    pub value_int: i64,
     _internal_key: u32,
+    pub prop_name: String,
+    pub value: Vec4,
+    pub value_str: String,
+    pub value_int: i64,
 }
 
 #[repr(C)]
 pub struct Anim {
-    pub layers: List<AnimLayerDesc>,
-    pub prop_overrides: List<PropOverride>,
+    pub time_begin: f64,
+    pub time_end: f64,
+    pub layers: RefList<AnimLayer>,
+    pub override_layer_weights: List<Real>,
+    pub overrides: List<PropOverride>,
     pub ignore_connections: bool,
+    pub custom: bool,
 }
 
 #[repr(C)]
@@ -1289,7 +1646,7 @@ pub struct AnimStack {
     pub time_begin: f64,
     pub time_end: f64,
     pub layers: RefList<AnimLayer>,
-    pub anim: Anim,
+    pub anim: Ref<Anim>,
 }
 
 #[repr(C)]
@@ -1311,7 +1668,7 @@ pub struct AnimLayer {
     pub compose_scale: bool,
     pub anim_values: RefList<AnimValue>,
     pub anim_props: List<AnimProp>,
-    pub anim: Anim,
+    pub anim: Ref<Anim>,
     _min_element_id: u32,
     _max_element_id: u32,
     _element_id_bitmask: [u32; 4],
@@ -1340,6 +1697,7 @@ impl Default for Interpolation {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Tangent {
     pub dx: f32,
     pub dy: f32,
@@ -1348,6 +1706,7 @@ pub struct Tangent {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Keyframe {
     pub time: f64,
     pub value: Real,
@@ -1383,9 +1742,9 @@ pub struct SelectionNode {
     pub target_node: Option<Ref<Node>>,
     pub target_mesh: Option<Ref<Mesh>>,
     pub include_node: bool,
-    pub vertices: List<i32>,
-    pub edges: List<i32>,
-    pub faces: List<i32>,
+    pub vertices: List<u32>,
+    pub edges: List<u32>,
+    pub faces: List<u32>,
 }
 
 #[repr(C)]
@@ -1456,7 +1815,7 @@ pub struct Constraint {
     pub transform_offset: Transform,
     pub aim_vector: Vec3,
     pub aim_up_type: ConstraintAimUpType,
-    pub aim_up_node: Ref<Node>,
+    pub aim_up_node: Option<Ref<Node>>,
     pub aim_up_vector: Vec3,
     pub ik_effector: Option<Ref<Node>>,
     pub ik_end_node: Option<Ref<Node>>,
@@ -1511,19 +1870,91 @@ pub struct Application {
     pub version: String,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileFormat {
+    Unknown = 0,
+    Fbx = 1,
+    Obj = 2,
+    Mtl = 3,
+}
+
+impl Default for FileFormat {
+    fn default() -> Self { Self::Unknown }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WarningType {
+    MissingExternalFile = 0,
+    ImplicitMtl = 1,
+    TruncatedArray = 2,
+    MissingGeometryData = 3,
+    IndexClamped = 4,
+    BadUnicode = 5,
+    BadElementConnectedToRoot = 6,
+    DuplicateObjectId = 7,
+    EmptyFaceRemoved = 8,
+    UnknownObjDirective = 9,
+}
+
+impl Default for WarningType {
+    fn default() -> Self { Self::MissingExternalFile }
+}
+
+#[repr(C)]
+pub struct Warning {
+    pub type_: WarningType,
+    pub description: String,
+    pub element_id: u32,
+    pub count: usize,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ThumbnailFormat {
+    Unknown = 0,
+    Rgb24 = 1,
+    Rgba32 = 2,
+}
+
+impl Default for ThumbnailFormat {
+    fn default() -> Self { Self::Unknown }
+}
+
+#[repr(C)]
+pub struct Thumbnail {
+    pub props: Props,
+    pub width: u32,
+    pub height: u32,
+    pub format: ThumbnailFormat,
+    pub data: Blob,
+}
+
 #[repr(C)]
 pub struct Metadata {
+    pub warnings: List<Warning>,
     pub ascii: bool,
     pub version: u32,
+    pub file_format: FileFormat,
+    pub may_contain_no_index: bool,
+    pub may_contain_null_materials: bool,
+    pub may_contain_missing_vertex_position: bool,
+    pub may_contain_broken_elements: bool,
+    pub is_unsafe: bool,
+    pub has_warning: [bool; 10],
     pub creator: String,
     pub big_endian: bool,
     pub filename: String,
     pub relative_root: String,
+    pub raw_filename: Blob,
+    pub raw_relative_root: Blob,
     pub exporter: Exporter,
     pub exporter_version: u32,
     pub scene_props: Props,
     pub original_application: Application,
     pub latest_application: Application,
+    pub thumbnail: Thumbnail,
     pub geometry_ignored: bool,
     pub animation_ignored: bool,
     pub embedded_ignored: bool,
@@ -1533,34 +1964,12 @@ pub struct Metadata {
     pub result_allocs: usize,
     pub temp_allocs: usize,
     pub element_buffer_size: usize,
+    pub num_shader_textures: usize,
     pub bone_prop_size_unit: Real,
     pub bone_prop_limb_length_relative: bool,
-    pub ktime_to_sec: f64,
-}
-
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CoordinateAxis {
-    PositiveX = 0,
-    NegativeX = 1,
-    PositiveY = 2,
-    NegativeY = 3,
-    PositiveZ = 4,
-    NegativeZ = 5,
-    Unknown = 6,
-}
-
-impl Default for CoordinateAxis {
-    fn default() -> Self { Self::PositiveX }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[derive(Default)]
-pub struct CoordinateAxes {
-    pub right: CoordinateAxis,
-    pub up: CoordinateAxis,
-    pub front: CoordinateAxis,
+    pub ktime_second: i64,
+    pub original_file_path: String,
+    pub raw_original_file_path: Blob,
 }
 
 #[repr(u32)]
@@ -1635,8 +2044,7 @@ pub struct Scene {
     pub metadata: Metadata,
     pub settings: SceneSettings,
     pub root_node: Ref<Node>,
-    pub anim: Anim,
-    pub combined_anim: Anim,
+    pub anim: Ref<Anim>,
     pub unknowns: RefList<Unknown>,
     pub nodes: RefList<Node>,
     pub meshes: RefList<Mesh>,
@@ -1652,6 +2060,7 @@ pub struct Scene {
     pub procedural_geometries: RefList<ProceduralGeometry>,
     pub stereo_cameras: RefList<StereoCamera>,
     pub camera_switchers: RefList<CameraSwitcher>,
+    pub markers: RefList<Marker>,
     pub lod_groups: RefList<LodGroup>,
     pub skin_deformers: RefList<SkinDeformer>,
     pub skin_clusters: RefList<SkinCluster>,
@@ -1676,15 +2085,18 @@ pub struct Scene {
     pub constraints: RefList<Constraint>,
     pub poses: RefList<Pose>,
     pub metadata_objects: RefList<MetadataObject>,
+    pub texture_files: List<TextureFile>,
     pub elements: RefList<Element>,
     pub connections_src: List<Connection>,
     pub connections_dst: List<Connection>,
     pub elements_by_name: List<NameElement>,
+    pub dom_root: Option<Ref<DomNode>>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct CurvePoint {
     pub valid: bool,
     pub position: Vec3,
@@ -1694,6 +2106,7 @@ pub struct CurvePoint {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct SurfacePoint {
     pub valid: bool,
     pub position: Vec3,
@@ -1705,8 +2118,13 @@ pub struct SurfacePoint {
 #[derive(Clone, Copy)]
 pub struct TopoFlags(u32);
 impl TopoFlags {
+    pub const NONE: TopoFlags = TopoFlags(0);
     pub const NON_MANIFOLD: TopoFlags = TopoFlags(0x1);
 }
+
+const TOPOFLAGS_NAMES: [(&'static str, u32); 1] = [
+    ("NON_MANIFOLD", 0x1),
+];
 
 impl TopoFlags {
     pub fn any(self) -> bool { self.0 != 0 }
@@ -1715,6 +2133,11 @@ impl TopoFlags {
 }
 impl Default for TopoFlags {
     fn default() -> Self { Self(0) }
+}
+impl Debug for TopoFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_flags(f, &TOPOFLAGS_NAMES, self.0)
+    }
 }
 impl BitAnd for TopoFlags {
     type Output = Self;
@@ -1741,13 +2164,14 @@ impl BitXorAssign for TopoFlags {
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
+#[derive(Debug)]
 pub struct TopoEdge {
-    pub index: i32,
-    pub next: i32,
-    pub prev: i32,
-    pub twin: i32,
-    pub face: i32,
-    pub edge: i32,
+    pub index: u32,
+    pub next: u32,
+    pub prev: u32,
+    pub twin: u32,
+    pub face: u32,
+    pub edge: u32,
     pub flags: TopoFlags,
 }
 
@@ -1810,10 +2234,29 @@ impl Default for RawStream {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OpenFileType {
+    MainModel = 0,
+    GeometryCache = 1,
+    ObjMtl = 2,
+}
+
+impl Default for OpenFileType {
+    fn default() -> Self { Self::MainModel }
+}
+
+#[repr(C)]
+pub struct OpenFileInfo {
+    pub type_: OpenFileType,
+    pub temp_allocator: RawAllocator,
+    pub original_filename: Blob,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RawOpenFileCb {
-    pub fn_: Option<unsafe extern "C" fn (*mut c_void, *mut RawStream, *const u8, usize) -> bool>,
+    pub fn_: Option<unsafe extern "C" fn (*mut c_void, *mut RawStream, *const u8, usize, *const OpenFileInfo) -> bool>,
     pub user: *mut c_void,
 }
 
@@ -1824,6 +2267,33 @@ impl Default for RawOpenFileCb {
             user: ptr::null::<c_void>() as *mut c_void,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RawCloseMemoryCb {
+    pub fn_: Option<unsafe extern "C" fn (*mut c_void, *mut c_void, usize)>,
+    pub user: *mut c_void,
+}
+
+impl Default for RawCloseMemoryCb {
+    fn default() -> Self {
+        RawCloseMemoryCb {
+            fn_: None,
+            user: ptr::null::<c_void>() as *mut c_void,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[derive(Default)]
+pub struct RawOpenMemoryOpts {
+    pub _begin_zero: u32,
+    pub allocator: RawAllocatorOpts,
+    pub no_copy: bool,
+    pub close_cb: RawCloseMemoryCb,
+    pub _end_zero: u32,
 }
 
 #[repr(C)]
@@ -1840,15 +2310,22 @@ pub enum ErrorType {
     None = 0,
     Unknown = 1,
     FileNotFound = 2,
-    OutOfMemory = 3,
-    MemoryLimit = 4,
-    AllocationLimit = 5,
-    TruncatedFile = 6,
-    Io = 7,
-    Cancelled = 8,
-    UnsupportedVersion = 9,
-    NotFbx = 10,
+    ExternalFileNotFound = 3,
+    OutOfMemory = 4,
+    MemoryLimit = 5,
+    AllocationLimit = 6,
+    TruncatedFile = 7,
+    Io = 8,
+    Cancelled = 9,
+    UnrecognizedFileFormat = 10,
     UninitializedOptions = 11,
+    ZeroVertexSize = 12,
+    InvalidUtf8 = 13,
+    FeatureDisabled = 14,
+    BadNurbs = 15,
+    BadIndex = 16,
+    UnsafeOptions = 17,
+    DuplicateOverride = 18,
 }
 
 impl Default for ErrorType {
@@ -1862,6 +2339,17 @@ pub struct Error {
     pub description: String,
     pub stack_size: u32,
     pub stack: [ErrorFrame; 8],
+    info_length: usize,
+    info_buf: InlineBuf<[u8; 256]>,
+}
+
+impl Error {
+    pub fn info(&self) -> &str {
+        unsafe {
+            let buf: &[mem::MaybeUninit<u8>; 256] = mem::transmute(&self.info_buf);
+            str::from_utf8(mem::transmute(&buf[..self.info_length])).unwrap()
+        }
+    }
 }
 
 #[repr(C)]
@@ -1910,12 +2398,67 @@ pub struct InflateInput {
     pub progress_interval_hint: u64,
     pub progress_size_before: u64,
     pub progress_size_after: u64,
+    pub no_header: bool,
+    pub no_checksum: bool,
+    pub internal_fast_bits: usize,
 }
 
 #[repr(C)]
 pub struct InflateRetain {
     pub initialized: bool,
-    pub data: [u64; 512],
+    pub data: [u64; 1024],
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IndexErrorHandling {
+    Clamp = 0,
+    NoIndex = 1,
+    AbortLoading = 2,
+    UnsafeIgnore = 3,
+}
+
+impl Default for IndexErrorHandling {
+    fn default() -> Self { Self::Clamp }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UnicodeErrorHandling {
+    ReplacementCharacter = 0,
+    Underscore = 1,
+    QuestionMark = 2,
+    Remove = 3,
+    AbortLoading = 4,
+    UnsafeIgnore = 5,
+}
+
+impl Default for UnicodeErrorHandling {
+    fn default() -> Self { Self::ReplacementCharacter }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GeometryTransformHandling {
+    Preserve = 0,
+    HelperNodes = 1,
+    ModifyGeometry = 2,
+    ModifyGeometryNoFallback = 3,
+}
+
+impl Default for GeometryTransformHandling {
+    fn default() -> Self { Self::Preserve }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpaceConversion {
+    TransformRoot = 0,
+    AdjustTransforms = 1,
+}
+
+impl Default for SpaceConversion {
+    fn default() -> Self { Self::TransformRoot }
 }
 
 #[repr(C)]
@@ -1928,29 +2471,57 @@ pub struct RawLoadOpts {
     pub ignore_geometry: bool,
     pub ignore_animation: bool,
     pub ignore_embedded: bool,
+    pub ignore_all_content: bool,
     pub evaluate_skinning: bool,
     pub evaluate_caches: bool,
     pub load_external_files: bool,
+    pub ignore_missing_external_files: bool,
     pub skip_skin_vertices: bool,
+    pub clean_skin_weights: bool,
     pub disable_quirks: bool,
     pub strict: bool,
-    pub allow_out_of_bounds_vertex_indices: bool,
+    pub allow_unsafe: bool,
+    pub index_error_handling: IndexErrorHandling,
     pub connect_broken_elements: bool,
     pub allow_nodes_out_of_root: bool,
     pub allow_null_material: bool,
+    pub allow_missing_vertex_position: bool,
+    pub allow_empty_faces: bool,
     pub generate_missing_normals: bool,
+    pub open_main_file_with_default: bool,
+    pub path_separator: u8,
     pub file_size_estimate: u64,
     pub read_buffer_size: usize,
     pub filename: RawString,
+    pub raw_filename: RawBlob,
     pub progress_cb: RawProgressCb,
     pub progress_interval_hint: u64,
     pub open_file_cb: RawOpenFileCb,
+    pub geometry_transform_handling: GeometryTransformHandling,
+    pub space_conversion: SpaceConversion,
     pub target_axes: CoordinateAxes,
     pub target_unit_meters: Real,
+    pub target_camera_axes: CoordinateAxes,
+    pub target_light_axes: CoordinateAxes,
+    pub geometry_transform_helper_name: RawString,
     pub no_prop_unit_scaling: bool,
     pub no_anim_curve_unit_scaling: bool,
+    pub normalize_normals: bool,
+    pub normalize_tangents: bool,
     pub use_root_transform: bool,
     pub root_transform: Transform,
+    pub unicode_error_handling: UnicodeErrorHandling,
+    pub retain_dom: bool,
+    pub file_format: FileFormat,
+    pub file_format_lookahead: usize,
+    pub no_format_from_content: bool,
+    pub no_format_from_extension: bool,
+    pub obj_search_mtl_by_filename: bool,
+    pub obj_merge_objects: bool,
+    pub obj_merge_groups: bool,
+    pub obj_split_groups: bool,
+    pub obj_mtl_path: RawString,
+    pub obj_mtl_data: RawBlob,
     pub _end_zero: u32,
 }
 
@@ -1969,14 +2540,45 @@ pub struct RawEvaluateOpts {
 }
 
 #[repr(C)]
+pub struct PropOverrideDesc {
+    pub element_id: u32,
+    pub prop_name: String,
+    pub value: Vec4,
+    pub value_str: String,
+    pub value_int: i64,
+}
+
+#[repr(C)]
+pub struct AnimOpts {
+    _begin_zero: u32,
+    pub layer_ids: List<u32>,
+    pub override_layer_weights: List<Real>,
+    pub overrides: List<PropOverrideDesc>,
+    pub ignore_connections: bool,
+    pub result_allocator: RawAllocatorOpts,
+    _end_zero: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
-pub struct RawTessellateOpts {
+pub struct RawTessellateCurveOpts {
     pub _begin_zero: u32,
     pub temp_allocator: RawAllocatorOpts,
     pub result_allocator: RawAllocatorOpts,
-    pub span_subdivision_u: i32,
-    pub span_subdivision_v: i32,
+    pub span_subdivision: u32,
+    pub _end_zero: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[derive(Default)]
+pub struct RawTessellateSurfaceOpts {
+    pub _begin_zero: u32,
+    pub temp_allocator: RawAllocatorOpts,
+    pub result_allocator: RawAllocatorOpts,
+    pub span_subdivision_u: u32,
+    pub span_subdivision_v: u32,
     pub _end_zero: u32,
 }
 
@@ -1992,6 +2594,11 @@ pub struct RawSubdivideOpts {
     pub ignore_normals: bool,
     pub interpolate_normals: bool,
     pub interpolate_tangents: bool,
+    pub evaluate_source_vertices: bool,
+    pub max_source_vertices: usize,
+    pub evaluate_skin_weights: bool,
+    pub max_skin_weights: usize,
+    pub skin_deformer_index: usize,
     pub _end_zero: u32,
 }
 
@@ -2020,10 +2627,20 @@ pub struct RawGeometryCacheDataOpts {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub struct Panic {
     pub did_panic: bool,
-    pub message_length: usize,
-    pub message: [u8; 128],
+    message_length: usize,
+    message_buf: InlineBuf<[u8; 128]>,
+}
+
+impl Panic {
+    pub fn message(&self) -> &str {
+        unsafe {
+            let buf: &[mem::MaybeUninit<u8>; 128] = mem::transmute(&self.message_buf);
+            str::from_utf8(mem::transmute(&buf[..self.message_length])).unwrap()
+        }
+    }
 }
 
 #[derive(Default)]
@@ -2036,7 +2653,7 @@ pub struct AllocatorOpts {
 }
 
 impl RawAllocatorOpts {
-    fn from_rust(arg: &mut AllocatorOpts) -> Self {
+    pub fn from_rust(arg: &mut AllocatorOpts) -> Self {
         RawAllocatorOpts {
             allocator: RawAllocator::from_rust(&mut arg.allocator),
             memory_limit: arg.memory_limit,
@@ -2049,8 +2666,8 @@ impl RawAllocatorOpts {
 
 pub enum OpenFileCb<'a> {
     None,
-    Mut(&'a mut dyn FnMut(&str) -> Option<Stream>),
-    Ref(&'a dyn Fn(&str) -> Option<Stream>),
+    Mut(&'a mut dyn FnMut(&str, &OpenFileInfo) -> Option<Stream>),
+    Ref(&'a dyn Fn(&str, &OpenFileInfo) -> Option<Stream>),
     Raw(Unsafe<RawOpenFileCb>),
 }
 
@@ -2059,7 +2676,7 @@ impl<'a> Default for OpenFileCb<'a> {
 }
 
 impl RawOpenFileCb {
-    fn from_func<F: FnMut(&str) -> Option<Stream>>(arg: &mut F) -> Self {
+    fn from_func<F: FnMut(&str, &OpenFileInfo) -> Option<Stream>>(arg: &mut F) -> Self {
         RawOpenFileCb {
             fn_: Some(call_open_file_cb::<F>),
             user: arg as *mut F as *mut c_void,
@@ -2072,6 +2689,54 @@ impl RawOpenFileCb {
             OpenFileCb::Ref(f) => Self::from_func(f),
             OpenFileCb::Mut(f) => Self::from_func(f),
             OpenFileCb::Raw(raw) => raw.take(),
+        }
+    }
+}
+
+pub enum CloseMemoryCb<'a> {
+    None,
+    Mut(&'a mut dyn FnMut(*mut c_void, usize) -> ()),
+    Ref(&'a dyn Fn(*mut c_void, usize) -> ()),
+    Raw(Unsafe<RawCloseMemoryCb>),
+}
+
+impl<'a> Default for CloseMemoryCb<'a> {
+    fn default() -> Self { Self::None }
+}
+
+impl RawCloseMemoryCb {
+    fn from_func<F: FnMut(*mut c_void, usize) -> ()>(arg: &mut F) -> Self {
+        RawCloseMemoryCb {
+            fn_: Some(call_close_memory_cb::<F>),
+            user: arg as *mut F as *mut c_void,
+        }
+    }
+
+    fn from_rust(arg: &mut CloseMemoryCb) -> Self {
+        match arg {
+            CloseMemoryCb::None => Default::default(),
+            CloseMemoryCb::Ref(f) => Self::from_func(f),
+            CloseMemoryCb::Mut(f) => Self::from_func(f),
+            CloseMemoryCb::Raw(raw) => raw.take(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct OpenMemoryOpts<'a> {
+    pub allocator: AllocatorOpts,
+    pub no_copy: Unsafe<bool>,
+    pub close_cb: CloseMemoryCb<'a>,
+}
+
+impl RawOpenMemoryOpts {
+    pub fn from_rust(arg: &mut OpenMemoryOpts) -> Self {
+        RawOpenMemoryOpts {
+            _begin_zero: 0,
+            allocator: RawAllocatorOpts::from_rust(&mut arg.allocator),
+            no_copy: arg.no_copy.take(),
+            close_cb: RawCloseMemoryCb::from_rust(&mut arg.close_cb),
+            _end_zero: 0,
         }
     }
 }
@@ -2112,33 +2777,61 @@ pub struct LoadOpts<'a> {
     pub ignore_geometry: bool,
     pub ignore_animation: bool,
     pub ignore_embedded: bool,
+    pub ignore_all_content: bool,
     pub evaluate_skinning: bool,
     pub evaluate_caches: bool,
     pub load_external_files: bool,
+    pub ignore_missing_external_files: bool,
     pub skip_skin_vertices: bool,
+    pub clean_skin_weights: bool,
     pub disable_quirks: bool,
     pub strict: bool,
-    pub allow_out_of_bounds_vertex_indices: bool,
+    pub allow_unsafe: Unsafe<bool>,
+    pub index_error_handling: IndexErrorHandling,
     pub connect_broken_elements: bool,
     pub allow_nodes_out_of_root: bool,
     pub allow_null_material: bool,
+    pub allow_missing_vertex_position: bool,
+    pub allow_empty_faces: bool,
     pub generate_missing_normals: bool,
+    pub open_main_file_with_default: bool,
+    pub path_separator: u8,
     pub file_size_estimate: u64,
     pub read_buffer_size: usize,
     pub filename: Option<&'a str>,
+    pub raw_filename: Option<&'a [u8]>,
     pub progress_cb: ProgressCb<'a>,
     pub progress_interval_hint: u64,
     pub open_file_cb: OpenFileCb<'a>,
+    pub geometry_transform_handling: GeometryTransformHandling,
+    pub space_conversion: SpaceConversion,
     pub target_axes: CoordinateAxes,
     pub target_unit_meters: Real,
+    pub target_camera_axes: CoordinateAxes,
+    pub target_light_axes: CoordinateAxes,
+    pub geometry_transform_helper_name: Option<&'a str>,
     pub no_prop_unit_scaling: bool,
     pub no_anim_curve_unit_scaling: bool,
+    pub normalize_normals: bool,
+    pub normalize_tangents: bool,
     pub use_root_transform: bool,
     pub root_transform: Transform,
+    pub unicode_error_handling: UnicodeErrorHandling,
+    pub retain_dom: bool,
+    pub file_format: FileFormat,
+    pub file_format_lookahead: usize,
+    pub no_format_from_content: bool,
+    pub no_format_from_extension: bool,
+    pub obj_search_mtl_by_filename: bool,
+    pub obj_merge_objects: bool,
+    pub obj_merge_groups: bool,
+    pub obj_split_groups: bool,
+    pub obj_mtl_path: Option<&'a str>,
+    pub obj_mtl_data: Option<&'a [u8]>,
 }
 
 impl RawLoadOpts {
-    fn from_rust(arg: &mut LoadOpts) -> Self {
+    pub fn from_rust(arg: &mut LoadOpts) -> Self {
         RawLoadOpts {
             _begin_zero: 0,
             temp_allocator: RawAllocatorOpts::from_rust(&mut arg.temp_allocator),
@@ -2146,29 +2839,57 @@ impl RawLoadOpts {
             ignore_geometry: arg.ignore_geometry,
             ignore_animation: arg.ignore_animation,
             ignore_embedded: arg.ignore_embedded,
+            ignore_all_content: arg.ignore_all_content,
             evaluate_skinning: arg.evaluate_skinning,
             evaluate_caches: arg.evaluate_caches,
             load_external_files: arg.load_external_files,
+            ignore_missing_external_files: arg.ignore_missing_external_files,
             skip_skin_vertices: arg.skip_skin_vertices,
+            clean_skin_weights: arg.clean_skin_weights,
             disable_quirks: arg.disable_quirks,
             strict: arg.strict,
-            allow_out_of_bounds_vertex_indices: arg.allow_out_of_bounds_vertex_indices,
+            allow_unsafe: arg.allow_unsafe.take(),
+            index_error_handling: arg.index_error_handling,
             connect_broken_elements: arg.connect_broken_elements,
             allow_nodes_out_of_root: arg.allow_nodes_out_of_root,
             allow_null_material: arg.allow_null_material,
+            allow_missing_vertex_position: arg.allow_missing_vertex_position,
+            allow_empty_faces: arg.allow_empty_faces,
             generate_missing_normals: arg.generate_missing_normals,
+            open_main_file_with_default: arg.open_main_file_with_default,
+            path_separator: arg.path_separator,
             file_size_estimate: arg.file_size_estimate,
             read_buffer_size: arg.read_buffer_size,
             filename: RawString::from_rust(&mut arg.filename),
+            raw_filename: RawBlob::from_rust(&mut arg.raw_filename),
             progress_cb: RawProgressCb::from_rust(&mut arg.progress_cb),
             progress_interval_hint: arg.progress_interval_hint,
             open_file_cb: RawOpenFileCb::from_rust(&mut arg.open_file_cb),
+            geometry_transform_handling: arg.geometry_transform_handling,
+            space_conversion: arg.space_conversion,
             target_axes: arg.target_axes,
             target_unit_meters: arg.target_unit_meters,
+            target_camera_axes: arg.target_camera_axes,
+            target_light_axes: arg.target_light_axes,
+            geometry_transform_helper_name: RawString::from_rust(&mut arg.geometry_transform_helper_name),
             no_prop_unit_scaling: arg.no_prop_unit_scaling,
             no_anim_curve_unit_scaling: arg.no_anim_curve_unit_scaling,
+            normalize_normals: arg.normalize_normals,
+            normalize_tangents: arg.normalize_tangents,
             use_root_transform: arg.use_root_transform,
             root_transform: arg.root_transform,
+            unicode_error_handling: arg.unicode_error_handling,
+            retain_dom: arg.retain_dom,
+            file_format: arg.file_format,
+            file_format_lookahead: arg.file_format_lookahead,
+            no_format_from_content: arg.no_format_from_content,
+            no_format_from_extension: arg.no_format_from_extension,
+            obj_search_mtl_by_filename: arg.obj_search_mtl_by_filename,
+            obj_merge_objects: arg.obj_merge_objects,
+            obj_merge_groups: arg.obj_merge_groups,
+            obj_split_groups: arg.obj_split_groups,
+            obj_mtl_path: RawString::from_rust(&mut arg.obj_mtl_path),
+            obj_mtl_data: RawBlob::from_rust(&mut arg.obj_mtl_data),
             _end_zero: 0,
         }
     }
@@ -2185,7 +2906,7 @@ pub struct EvaluateOpts<'a> {
 }
 
 impl RawEvaluateOpts {
-    fn from_rust(arg: &mut EvaluateOpts) -> Self {
+    pub fn from_rust(arg: &mut EvaluateOpts) -> Self {
         RawEvaluateOpts {
             _begin_zero: 0,
             temp_allocator: RawAllocatorOpts::from_rust(&mut arg.temp_allocator),
@@ -2200,16 +2921,35 @@ impl RawEvaluateOpts {
 }
 
 #[derive(Default)]
-pub struct TessellateOpts {
+pub struct TessellateCurveOpts {
     pub temp_allocator: AllocatorOpts,
     pub result_allocator: AllocatorOpts,
-    pub span_subdivision_u: i32,
-    pub span_subdivision_v: i32,
+    pub span_subdivision: u32,
 }
 
-impl RawTessellateOpts {
-    fn from_rust(arg: &mut TessellateOpts) -> Self {
-        RawTessellateOpts {
+impl RawTessellateCurveOpts {
+    pub fn from_rust(arg: &mut TessellateCurveOpts) -> Self {
+        RawTessellateCurveOpts {
+            _begin_zero: 0,
+            temp_allocator: RawAllocatorOpts::from_rust(&mut arg.temp_allocator),
+            result_allocator: RawAllocatorOpts::from_rust(&mut arg.result_allocator),
+            span_subdivision: arg.span_subdivision,
+            _end_zero: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct TessellateSurfaceOpts {
+    pub temp_allocator: AllocatorOpts,
+    pub result_allocator: AllocatorOpts,
+    pub span_subdivision_u: u32,
+    pub span_subdivision_v: u32,
+}
+
+impl RawTessellateSurfaceOpts {
+    pub fn from_rust(arg: &mut TessellateSurfaceOpts) -> Self {
+        RawTessellateSurfaceOpts {
             _begin_zero: 0,
             temp_allocator: RawAllocatorOpts::from_rust(&mut arg.temp_allocator),
             result_allocator: RawAllocatorOpts::from_rust(&mut arg.result_allocator),
@@ -2229,10 +2969,15 @@ pub struct SubdivideOpts {
     pub ignore_normals: bool,
     pub interpolate_normals: bool,
     pub interpolate_tangents: bool,
+    pub evaluate_source_vertices: bool,
+    pub max_source_vertices: usize,
+    pub evaluate_skin_weights: bool,
+    pub max_skin_weights: usize,
+    pub skin_deformer_index: usize,
 }
 
 impl RawSubdivideOpts {
-    fn from_rust(arg: &mut SubdivideOpts) -> Self {
+    pub fn from_rust(arg: &mut SubdivideOpts) -> Self {
         RawSubdivideOpts {
             _begin_zero: 0,
             temp_allocator: RawAllocatorOpts::from_rust(&mut arg.temp_allocator),
@@ -2242,6 +2987,11 @@ impl RawSubdivideOpts {
             ignore_normals: arg.ignore_normals,
             interpolate_normals: arg.interpolate_normals,
             interpolate_tangents: arg.interpolate_tangents,
+            evaluate_source_vertices: arg.evaluate_source_vertices,
+            max_source_vertices: arg.max_source_vertices,
+            evaluate_skin_weights: arg.evaluate_skin_weights,
+            max_skin_weights: arg.max_skin_weights,
+            skin_deformer_index: arg.skin_deformer_index,
             _end_zero: 0,
         }
     }
@@ -2256,7 +3006,7 @@ pub struct GeometryCacheOpts<'a> {
 }
 
 impl RawGeometryCacheOpts {
-    fn from_rust(arg: &mut GeometryCacheOpts) -> Self {
+    pub fn from_rust(arg: &mut GeometryCacheOpts) -> Self {
         RawGeometryCacheOpts {
             _begin_zero: 0,
             temp_allocator: RawAllocatorOpts::from_rust(&mut arg.temp_allocator),
@@ -2277,7 +3027,7 @@ pub struct GeometryCacheDataOpts<'a> {
 }
 
 impl RawGeometryCacheDataOpts {
-    fn from_rust(arg: &mut GeometryCacheDataOpts) -> Self {
+    pub fn from_rust(arg: &mut GeometryCacheDataOpts) -> Self {
         RawGeometryCacheDataOpts {
             _begin_zero: 0,
             open_file_cb: RawOpenFileCb::from_rust(&mut arg.open_file_cb),
@@ -2294,6 +3044,7 @@ pub type Result<T> = result::Result<T, Error>;
 #[link(name="ufbx")]
 extern "C" {
     pub static ufbx_empty_string: String;
+    pub static ufbx_empty_blob: Blob;
     pub static ufbx_identity_matrix: Matrix;
     pub static ufbx_identity_transform: Transform;
     pub static ufbx_zero_vec2: Vec2;
@@ -2322,14 +3073,21 @@ extern "C" {
     pub fn ufbx_find_int_len(props: *const Props, name: *const u8, name_len: usize, def: i64) -> i64;
     pub fn ufbx_find_bool_len(props: *const Props, name: *const u8, name_len: usize, def: bool) -> bool;
     pub fn ufbx_find_string_len(props: *const Props, name: *const u8, name_len: usize, def: String) -> String;
+    pub fn ufbx_find_blob_len(props: *const Props, name: *const u8, name_len: usize, def: Blob) -> Blob;
+    pub fn ufbx_find_prop_concat(props: *const Props, parts: *const String, num_parts: usize) -> *mut Prop;
+    pub fn ufbx_get_prop_element(element: *const Element, prop: *const Prop, type_: ElementType) -> *mut Element;
+    pub fn ufbx_find_prop_element_len(element: *const Element, name: *const u8, name_len: usize, type_: ElementType) -> *mut Element;
     pub fn ufbx_find_element_len(scene: *const Scene, type_: ElementType, name: *const u8, name_len: usize) -> *mut Element;
     pub fn ufbx_find_node_len(scene: *const Scene, name: *const u8, name_len: usize) -> *mut Node;
     pub fn ufbx_find_anim_stack_len(scene: *const Scene, name: *const u8, name_len: usize) -> *mut AnimStack;
+    pub fn ufbx_find_material_len(scene: *const Scene, name: *const u8, name_len: usize) -> *mut Material;
     pub fn ufbx_find_anim_prop_len(layer: *const AnimLayer, element: *const Element, prop: *const u8, prop_len: usize) -> *mut AnimProp;
     pub fn ufbx_find_anim_props(layer: *const AnimLayer, element: *const Element) -> List<AnimProp>;
     pub fn ufbx_get_compatible_matrix_for_normals(node: *const Node) -> Matrix;
     pub fn ufbx_inflate(dst: *mut c_void, dst_size: usize, input: *const InflateInput, retain: *mut InflateRetain) -> isize;
-    pub fn ufbx_open_file(user: *mut c_void, stream: *mut RawStream, path: *const u8, path_len: usize) -> bool;
+    pub fn ufbx_open_file(stream: *mut RawStream, path: *const u8, path_len: usize) -> bool;
+    pub fn ufbx_default_open_file(user: *mut c_void, stream: *mut RawStream, path: *const u8, path_len: usize, info: *const OpenFileInfo) -> bool;
+    pub fn ufbx_open_memory(stream: *mut RawStream, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_evaluate_curve(curve: *const AnimCurve, time: f64, default_value: Real) -> Real;
     pub fn ufbx_evaluate_anim_value_real(anim_value: *const AnimValue, time: f64) -> Real;
     pub fn ufbx_evaluate_anim_value_vec2(anim_value: *const AnimValue, time: f64) -> Vec2;
@@ -2338,11 +3096,16 @@ extern "C" {
     pub fn ufbx_evaluate_props(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize) -> Props;
     pub fn ufbx_evaluate_transform(anim: *const Anim, node: *const Node, time: f64) -> Transform;
     pub fn ufbx_evaluate_blend_weight(anim: *const Anim, channel: *const BlendChannel, time: f64) -> Real;
-    pub fn ufbx_prepare_prop_overrides(overrides: *mut PropOverride, num_overrides: usize) -> List<PropOverride>;
     pub fn ufbx_evaluate_scene(scene: *const Scene, anim: *const Anim, time: f64, opts: *const RawEvaluateOpts, error: *mut Error) -> *mut Scene;
+    pub fn ufbx_create_anim(scene: *const Scene, opts: *const AnimOpts, error: *mut Error) -> *mut Anim;
+    pub fn ufbx_retain_anim(anim: *mut Anim);
+    pub fn ufbx_free_anim(anim: *mut Anim);
     pub fn ufbx_find_prop_texture_len(material: *const Material, name: *const u8, name_len: usize) -> *mut Texture;
     pub fn ufbx_find_shader_prop_len(shader: *const Shader, name: *const u8, name_len: usize) -> String;
+    pub fn ufbx_find_shader_prop_bindings_len(shader: *const Shader, name: *const u8, name_len: usize) -> List<ShaderPropBinding>;
+    pub fn ufbx_find_shader_texture_input_len(shader: *const ShaderTexture, name: *const u8, name_len: usize) -> *mut ShaderTextureInput;
     pub fn ufbx_coordinate_axes_valid(axes: CoordinateAxes) -> bool;
+    pub fn ufbx_quat_dot(a: Quat, b: Quat) -> Real;
     pub fn ufbx_quat_mul(a: Quat, b: Quat) -> Quat;
     pub fn ufbx_quat_normalize(q: Quat) -> Quat;
     pub fn ufbx_quat_fix_antipodal(q: Quat, reference: Quat) -> Quat;
@@ -2366,16 +3129,20 @@ extern "C" {
     pub fn ufbx_evaluate_nurbs_basis(basis: *const NurbsBasis, u: Real, weights: *mut Real, num_weights: usize, derivatives: *mut Real, num_derivatives: usize) -> usize;
     pub fn ufbx_evaluate_nurbs_curve(curve: *const NurbsCurve, u: Real) -> CurvePoint;
     pub fn ufbx_evaluate_nurbs_surface(surface: *const NurbsSurface, u: Real, v: Real) -> SurfacePoint;
-    pub fn ufbx_tessellate_nurbs_surface(surface: *const NurbsSurface, opts: *const RawTessellateOpts, error: *mut Error) -> *mut Mesh;
+    pub fn ufbx_tessellate_nurbs_curve(curve: *const NurbsCurve, opts: *const RawTessellateCurveOpts, error: *mut Error) -> *mut LineCurve;
+    pub fn ufbx_tessellate_nurbs_surface(surface: *const NurbsSurface, opts: *const RawTessellateSurfaceOpts, error: *mut Error) -> *mut Mesh;
+    pub fn ufbx_free_line_curve(curve: *mut LineCurve);
+    pub fn ufbx_retain_line_curve(curve: *mut LineCurve);
+    pub fn ufbx_find_face_index(mesh: *mut Mesh, index: usize) -> u32;
     pub fn ufbx_catch_triangulate_face(panic: *mut Panic, indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: Face) -> u32;
     pub fn ufbx_catch_compute_topology(panic: *mut Panic, mesh: *const Mesh, topo: *mut TopoEdge, num_topo: usize);
-    pub fn ufbx_catch_topo_next_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: i32) -> i32;
-    pub fn ufbx_catch_topo_prev_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: i32) -> i32;
+    pub fn ufbx_catch_topo_next_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: u32) -> u32;
+    pub fn ufbx_catch_topo_prev_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: u32) -> u32;
     pub fn ufbx_catch_get_weighted_face_normal(panic: *mut Panic, positions: *const VertexVec3, face: Face) -> Vec3;
-    pub fn ufbx_catch_generate_normal_mapping(panic: *mut Panic, mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut i32, num_normal_indices: usize, assume_smooth: bool) -> usize;
-    pub fn ufbx_generate_normal_mapping(mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut i32, num_normal_indices: usize, assume_smooth: bool) -> usize;
-    pub fn ufbx_catch_compute_normals(panic: *mut Panic, mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const i32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
-    pub fn ufbx_compute_normals(mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const i32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
+    pub fn ufbx_catch_generate_normal_mapping(panic: *mut Panic, mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut u32, num_normal_indices: usize, assume_smooth: bool) -> usize;
+    pub fn ufbx_generate_normal_mapping(mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut u32, num_normal_indices: usize, assume_smooth: bool) -> usize;
+    pub fn ufbx_catch_compute_normals(panic: *mut Panic, mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const u32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
+    pub fn ufbx_compute_normals(mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const u32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
     pub fn ufbx_subdivide_mesh(mesh: *const Mesh, level: usize, opts: *const RawSubdivideOpts, error: *mut Error) -> *mut Mesh;
     pub fn ufbx_free_mesh(mesh: *mut Mesh);
     pub fn ufbx_retain_mesh(mesh: *mut Mesh);
@@ -2383,20 +3150,57 @@ extern "C" {
     pub fn ufbx_load_geometry_cache_len(filename: *const u8, filename_len: usize, opts: *const RawGeometryCacheOpts, error: *mut Error) -> *mut GeometryCache;
     pub fn ufbx_free_geometry_cache(cache: *mut GeometryCache);
     pub fn ufbx_retain_geometry_cache(cache: *mut GeometryCache);
-    pub fn ufbx_get_read_geometry_cache_real_num_data(frame: *const CacheFrame) -> usize;
-    pub fn ufbx_get_sample_geometry_cache_real_num_data(channel: *const CacheChannel, time: f64) -> usize;
-    pub fn ufbx_get_read_geometry_cache_vec3_num_data(frame: *const CacheFrame) -> usize;
-    pub fn ufbx_get_sample_geometry_cache_vec3_num_data(channel: *const CacheChannel, time: f64) -> usize;
     pub fn ufbx_read_geometry_cache_real(frame: *const CacheFrame, data: *mut Real, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_sample_geometry_cache_real(channel: *const CacheChannel, time: f64, data: *mut Real, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_read_geometry_cache_vec3(frame: *const CacheFrame, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_sample_geometry_cache_vec3(channel: *const CacheChannel, time: f64, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
+    pub fn ufbx_dom_find_len(parent: *const DomNode, name: *const u8, name_len: usize) -> *mut DomNode;
     pub fn ufbx_generate_indices(streams: *const VertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
     pub fn ufbx_catch_get_vertex_real(panic: *mut Panic, v: *const VertexReal, index: usize) -> Real;
     pub fn ufbx_catch_get_vertex_vec2(panic: *mut Panic, v: *const VertexVec2, index: usize) -> Vec2;
     pub fn ufbx_catch_get_vertex_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Vec3;
     pub fn ufbx_catch_get_vertex_vec4(panic: *mut Panic, v: *const VertexVec4, index: usize) -> Vec4;
     pub fn ufbx_get_triangulate_face_num_indices(face: Face) -> usize;
+    pub fn ufbx_as_unknown(element: *const Element) -> *mut Unknown;
+    pub fn ufbx_as_node(element: *const Element) -> *mut Node;
+    pub fn ufbx_as_mesh(element: *const Element) -> *mut Mesh;
+    pub fn ufbx_as_light(element: *const Element) -> *mut Light;
+    pub fn ufbx_as_camera(element: *const Element) -> *mut Camera;
+    pub fn ufbx_as_bone(element: *const Element) -> *mut Bone;
+    pub fn ufbx_as_empty(element: *const Element) -> *mut Empty;
+    pub fn ufbx_as_line_curve(element: *const Element) -> *mut LineCurve;
+    pub fn ufbx_as_nurbs_curve(element: *const Element) -> *mut NurbsCurve;
+    pub fn ufbx_as_nurbs_surface(element: *const Element) -> *mut NurbsSurface;
+    pub fn ufbx_as_nurbs_trim_surface(element: *const Element) -> *mut NurbsTrimSurface;
+    pub fn ufbx_as_nurbs_trim_boundary(element: *const Element) -> *mut NurbsTrimBoundary;
+    pub fn ufbx_as_procedural_geometry(element: *const Element) -> *mut ProceduralGeometry;
+    pub fn ufbx_as_stereo_camera(element: *const Element) -> *mut StereoCamera;
+    pub fn ufbx_as_camera_switcher(element: *const Element) -> *mut CameraSwitcher;
+    pub fn ufbx_as_marker(element: *const Element) -> *mut Marker;
+    pub fn ufbx_as_lod_group(element: *const Element) -> *mut LodGroup;
+    pub fn ufbx_as_skin_deformer(element: *const Element) -> *mut SkinDeformer;
+    pub fn ufbx_as_skin_cluster(element: *const Element) -> *mut SkinCluster;
+    pub fn ufbx_as_blend_deformer(element: *const Element) -> *mut BlendDeformer;
+    pub fn ufbx_as_blend_channel(element: *const Element) -> *mut BlendChannel;
+    pub fn ufbx_as_blend_shape(element: *const Element) -> *mut BlendShape;
+    pub fn ufbx_as_cache_deformer(element: *const Element) -> *mut CacheDeformer;
+    pub fn ufbx_as_cache_file(element: *const Element) -> *mut CacheFile;
+    pub fn ufbx_as_material(element: *const Element) -> *mut Material;
+    pub fn ufbx_as_texture(element: *const Element) -> *mut Texture;
+    pub fn ufbx_as_video(element: *const Element) -> *mut Video;
+    pub fn ufbx_as_shader(element: *const Element) -> *mut Shader;
+    pub fn ufbx_as_shader_binding(element: *const Element) -> *mut ShaderBinding;
+    pub fn ufbx_as_anim_stack(element: *const Element) -> *mut AnimStack;
+    pub fn ufbx_as_anim_layer(element: *const Element) -> *mut AnimLayer;
+    pub fn ufbx_as_anim_value(element: *const Element) -> *mut AnimValue;
+    pub fn ufbx_as_anim_curve(element: *const Element) -> *mut AnimCurve;
+    pub fn ufbx_as_display_layer(element: *const Element) -> *mut DisplayLayer;
+    pub fn ufbx_as_selection_set(element: *const Element) -> *mut SelectionSet;
+    pub fn ufbx_as_selection_node(element: *const Element) -> *mut SelectionNode;
+    pub fn ufbx_as_character(element: *const Element) -> *mut Character;
+    pub fn ufbx_as_constraint(element: *const Element) -> *mut Constraint;
+    pub fn ufbx_as_pose(element: *const Element) -> *mut Pose;
+    pub fn ufbx_as_metadata_object(element: *const Element) -> *mut MetadataObject;
     pub fn ufbx_ffi_find_int_len(retval: *mut i64, props: *const Props, name: *const u8, name_len: usize, def: *const i64);
     pub fn ufbx_ffi_find_vec3_len(retval: *mut Vec3, props: *const Props, name: *const u8, name_len: usize, def: *const Vec3);
     pub fn ufbx_ffi_find_string_len(retval: *mut String, props: *const Props, name: *const u8, name_len: usize, def: *const String);
@@ -2408,7 +3212,6 @@ extern "C" {
     pub fn ufbx_ffi_evaluate_props(retval: *mut Props, anim: *const Anim, element: *mut Element, time: f64, buffer: *mut Prop, buffer_size: usize);
     pub fn ufbx_ffi_evaluate_transform(retval: *mut Transform, anim: *const Anim, node: *const Node, time: f64);
     pub fn ufbx_ffi_evaluate_blend_weight(anim: *const Anim, channel: *const BlendChannel, time: f64) -> Real;
-    pub fn ufbx_ffi_prepare_prop_overrides(retval: *mut List<PropOverride>, overrides: *mut PropOverride, num_overrides: usize);
     pub fn ufbx_ffi_quat_mul(retval: *mut Quat, a: *const Quat, b: *const Quat);
     pub fn ufbx_ffi_quat_normalize(retval: *mut Quat, q: *const Quat);
     pub fn ufbx_ffi_quat_fix_antipodal(retval: *mut Quat, q: *const Quat, reference: *const Quat);
@@ -2442,6 +3245,11 @@ pub struct MeshRoot {
     _marker: marker::PhantomData<Mesh>,
 }
 
+pub struct LineCurveRoot {
+    line_curve: *mut LineCurve,
+    _marker: marker::PhantomData<LineCurve>,
+}
+
 pub struct GeometryCacheRoot {
     cache: *mut GeometryCache,
     _marker: marker::PhantomData<GeometryCache>,
@@ -2465,6 +3273,16 @@ impl MeshRoot {
     }
 }
 
+impl LineCurveRoot {
+    fn new(line_curve: *mut LineCurve) -> LineCurveRoot {
+        LineCurveRoot {
+            line_curve: line_curve,
+            _marker: marker::PhantomData,
+        }
+    }
+}
+
+
 impl GeometryCacheRoot {
     fn new(cache: *mut GeometryCache) -> GeometryCacheRoot {
         GeometryCacheRoot {
@@ -2486,6 +3304,12 @@ impl Drop for MeshRoot {
     }
 }
 
+impl Drop for LineCurveRoot {
+    fn drop(&mut self) {
+        unsafe { ufbx_free_line_curve(self.line_curve) }
+    }
+}
+
 impl Drop for GeometryCacheRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_geometry_cache(self.cache) }
@@ -2503,6 +3327,13 @@ impl Clone for MeshRoot {
     fn clone(&self) -> Self {
         unsafe { ufbx_retain_mesh(self.mesh) }
         MeshRoot::new(self.mesh)
+    }
+}
+
+impl Clone for LineCurveRoot {
+    fn clone(&self) -> Self {
+        unsafe { ufbx_retain_line_curve(self.line_curve) }
+        LineCurveRoot::new(self.line_curve)
     }
 }
 
@@ -2527,6 +3358,13 @@ impl Deref for MeshRoot {
     }
 }
 
+impl Deref for LineCurveRoot {
+    type Target = LineCurve;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.line_curve }
+    }
+}
+
 impl Deref for GeometryCacheRoot {
     type Target = GeometryCache;
     fn deref(&self) -> &Self::Target {
@@ -2539,6 +3377,9 @@ unsafe impl Sync for SceneRoot {}
 
 unsafe impl Send for MeshRoot {}
 unsafe impl Sync for MeshRoot {}
+
+unsafe impl Send for LineCurveRoot {}
+unsafe impl Sync for LineCurveRoot {}
 
 unsafe impl Send for GeometryCacheRoot {}
 unsafe impl Sync for GeometryCacheRoot {}
@@ -2652,24 +3493,31 @@ pub fn find_prop<'a>(props: &'a Props, name: &str) -> Option<&'a Prop> {
     if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_real(props: &Props, name: &str) -> Option<Real> {
-    find_prop(props, name).map(|p| p.value_vec3.x)
+// TODO: Property find functions
+
+// TODO: Property find functions
+
+// TODO: Property find functions
+
+// TODO: Property find functions
+
+// TODO: Property find functions
+
+pub fn find_blob(props: &Props, name: &str, def: Blob) -> Blob {
+    let result = unsafe { ufbx_find_blob_len(props as *const Props, name.as_ptr(), name.len(), def) };
+    result
 }
 
-pub fn find_vec3(props: &Props, name: &str) -> Option<Vec3> {
-    find_prop(props, name).map(|p| p.value_vec3)
+// TODO: ufbx_find_prop_concat()
+
+pub fn get_prop_element<'a>(element: &'a Element, prop: &Prop, type_: ElementType) -> Option<&'a Element> {
+    let result = unsafe { ufbx_get_prop_element(element as *const Element, prop as *const Prop, type_) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub fn find_int(props: &Props, name: &str) -> Option<i64> {
-    find_prop(props, name).map(|p| p.value_int)
-}
-
-pub fn find_bool(props: &Props, name: &str) -> Option<bool> {
-    find_prop(props, name).map(|p| p.value_int != 0)
-}
-
-pub fn find_string<'a>(props: &'a Props, name: &str) -> Option<&'a str> {
-    find_prop(props, name).map(|p| p.value_str.as_ref())
+pub fn find_prop_element<'a>(element: &'a Element, name: &str, type_: ElementType) -> Option<&'a Element> {
+    let result = unsafe { ufbx_find_prop_element_len(element as *const Element, name.as_ptr(), name.len(), type_) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
 pub fn find_element<'a>(scene: &'a Scene, type_: ElementType, name: &str) -> Option<&'a Element> {
@@ -2684,6 +3532,11 @@ pub fn find_node<'a>(scene: &'a Scene, name: &str) -> Option<&'a Node> {
 
 pub fn find_anim_stack<'a>(scene: &'a Scene, name: &str) -> Option<&'a AnimStack> {
     let result = unsafe { ufbx_find_anim_stack_len(scene as *const Scene, name.as_ptr(), name.len()) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn find_material<'a>(scene: &'a Scene, name: &str) -> Option<&'a Material> {
+    let result = unsafe { ufbx_find_material_len(scene as *const Scene, name.as_ptr(), name.len()) };
     if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
@@ -2707,9 +3560,23 @@ pub fn inflate(dst: &mut [u8], input: &InflateInput, retain: &mut InflateRetain)
     result
 }
 
-pub unsafe fn open_file_raw(user: *mut c_void, stream: &mut RawStream, path: &str) -> bool {
-    let result = { ufbx_open_file(user as *mut c_void, stream as *mut RawStream, path.as_ptr(), path.len()) };
+pub unsafe fn open_file_raw(stream: &mut RawStream, path: &str) -> bool {
+    let result = { ufbx_open_file(stream as *mut RawStream, path.as_ptr(), path.len()) };
     result
+}
+
+pub unsafe fn default_open_file_raw(user: *mut c_void, stream: &mut RawStream, path: &str, info: &OpenFileInfo) -> bool {
+    let result = { ufbx_default_open_file(user as *mut c_void, stream as *mut RawStream, path.as_ptr(), path.len(), info as *const OpenFileInfo) };
+    result
+}
+
+pub unsafe fn open_memory_raw(stream: &mut RawStream, data: &[u8], opts: &RawOpenMemoryOpts) -> Result<bool> {
+    let mut error: Error = Error::default();
+    let result = { ufbx_open_memory(stream as *mut RawStream, data.as_ptr() as *const c_void, data.len(), opts as *const RawOpenMemoryOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(result)
 }
 
 pub fn evaluate_curve(curve: &AnimCurve, time: f64, default_value: Real) -> Real {
@@ -2756,8 +3623,6 @@ pub fn evaluate_blend_weight(anim: &Anim, channel: &BlendChannel, time: f64) -> 
     result
 }
 
-// TODO: ufbx_prepare_prop_overrides()
-
 pub unsafe fn evaluate_scene_raw(scene: &Scene, anim: &Anim, time: f64, opts: &RawEvaluateOpts) -> Result<SceneRoot> {
     let mut error: Error = Error::default();
     let result = { ufbx_evaluate_scene(scene as *const Scene, anim as *const Anim, time, opts as *const RawEvaluateOpts, &mut error) };
@@ -2773,6 +3638,23 @@ pub fn evaluate_scene(scene: &Scene, anim: &Anim, time: f64, opts: EvaluateOpts)
     unsafe { evaluate_scene_raw(scene, anim, time, &opts_raw) }
 }
 
+pub fn create_anim(scene: &Scene, opts: &AnimOpts) -> Option<Result<&mut Anim>> {
+    let mut error: Error = Error::default();
+    let result = unsafe { ufbx_create_anim(scene as *const Scene, opts as *const AnimOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(result)
+}
+
+pub fn retain_anim(anim: &mut Anim) {
+    unsafe { ufbx_retain_anim(anim as *mut Anim) };
+}
+
+pub fn free_anim(anim: &mut Anim) {
+    unsafe { ufbx_free_anim(anim as *mut Anim) };
+}
+
 pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> Option<&'a Texture> {
     let result = unsafe { ufbx_find_prop_texture_len(material as *const Material, name.as_ptr(), name.len()) };
     if result.is_null() { None } else { unsafe { Some(&*result) } }
@@ -2783,8 +3665,23 @@ pub fn find_shader_prop<'a>(shader: &'a Shader, name: &'a str) -> &'a str {
     unsafe { result.as_static_ref() }
 }
 
+pub fn find_shader_prop_bindings<'a>(shader: &'a Shader, name: &str) -> &'a [ShaderPropBinding] {
+    let result = unsafe { ufbx_find_shader_prop_bindings_len(shader as *const Shader, name.as_ptr(), name.len()) };
+    unsafe { result.as_static_ref() }
+}
+
+pub fn find_shader_texture_input<'a>(shader: &ShaderTexture, name: &str) -> Option<&'a ShaderTextureInput> {
+    let result = unsafe { ufbx_find_shader_texture_input_len(shader as *const ShaderTexture, name.as_ptr(), name.len()) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
 pub fn coordinate_axes_valid(axes: CoordinateAxes) -> bool {
     let result = unsafe { ufbx_coordinate_axes_valid(axes) };
+    result
+}
+
+pub fn quat_dot(a: Quat, b: Quat) -> Real {
+    let result = unsafe { ufbx_quat_dot(a, b) };
     result
 }
 
@@ -2864,14 +3761,10 @@ pub fn matrix_to_transform(m: &Matrix) -> Transform {
 }
 
 pub fn get_skin_vertex_matrix(skin: &SkinDeformer, vertex: usize, fallback: &Matrix) -> Matrix {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_get_skin_vertex_matrix(&mut panic, skin as *const SkinDeformer, vertex, fallback as *const Matrix) };
     if panic.did_panic {
-        panic!("ufbx::get_skin_vertex_matrix() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::get_skin_vertex_matrix() {}", panic.message());
     }
     result
 }
@@ -2909,107 +3802,99 @@ pub fn evaluate_nurbs_surface(surface: &NurbsSurface, u: Real, v: Real) -> Surfa
     result
 }
 
-pub unsafe fn tessellate_nurbs_surface_raw(surface: &NurbsSurface, opts: &RawTessellateOpts) -> Result<MeshRoot> {
+pub unsafe fn tessellate_nurbs_curve_raw(curve: &NurbsCurve, opts: &RawTessellateCurveOpts) -> Result<LineCurveRoot> {
     let mut error: Error = Error::default();
-    let result = { ufbx_tessellate_nurbs_surface(surface as *const NurbsSurface, opts as *const RawTessellateOpts, &mut error) };
+    let result = { ufbx_tessellate_nurbs_curve(curve as *const NurbsCurve, opts as *const RawTessellateCurveOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(LineCurveRoot::new(result))
+}
+
+pub fn tessellate_nurbs_curve(curve: &NurbsCurve, opts: TessellateCurveOpts) -> Result<LineCurveRoot> {
+    let mut opts_mut = opts;
+    let opts_raw = RawTessellateCurveOpts::from_rust(&mut opts_mut);
+    unsafe { tessellate_nurbs_curve_raw(curve, &opts_raw) }
+}
+
+pub unsafe fn tessellate_nurbs_surface_raw(surface: &NurbsSurface, opts: &RawTessellateSurfaceOpts) -> Result<MeshRoot> {
+    let mut error: Error = Error::default();
+    let result = { ufbx_tessellate_nurbs_surface(surface as *const NurbsSurface, opts as *const RawTessellateSurfaceOpts, &mut error) };
     if error.type_ != ErrorType::None {
         return Err(error)
     }
     Ok(MeshRoot::new(result))
 }
 
-pub fn tessellate_nurbs_surface(surface: &NurbsSurface, opts: TessellateOpts) -> Result<MeshRoot> {
+pub fn tessellate_nurbs_surface(surface: &NurbsSurface, opts: TessellateSurfaceOpts) -> Result<MeshRoot> {
     let mut opts_mut = opts;
-    let opts_raw = RawTessellateOpts::from_rust(&mut opts_mut);
+    let opts_raw = RawTessellateSurfaceOpts::from_rust(&mut opts_mut);
     unsafe { tessellate_nurbs_surface_raw(surface, &opts_raw) }
 }
 
+pub fn find_face_index(mesh: &mut Mesh, index: usize) -> u32 {
+    let result = unsafe { ufbx_find_face_index(mesh as *mut Mesh, index) };
+    result
+}
+
 pub fn triangulate_face(indices: &mut [u32], mesh: &Mesh, face: Face) -> u32 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_triangulate_face(&mut panic, indices.as_mut_ptr(), indices.len(), mesh as *const Mesh, face) };
     if panic.did_panic {
-        panic!("ufbx::triangulate_face() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::triangulate_face() {}", panic.message());
     }
     result
 }
 
 pub fn compute_topology(mesh: &Mesh, topo: &mut [TopoEdge]) {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     unsafe { ufbx_catch_compute_topology(&mut panic, mesh as *const Mesh, topo.as_mut_ptr(), topo.len()) };
     if panic.did_panic {
-        panic!("ufbx::compute_topology() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::compute_topology() {}", panic.message());
     }
 }
 
-pub fn topo_next_vertex_edge(topo: &[TopoEdge], index: i32) -> i32 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+pub fn topo_next_vertex_edge(topo: &[TopoEdge], index: u32) -> u32 {
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_topo_next_vertex_edge(&mut panic, topo.as_ptr(), topo.len(), index) };
     if panic.did_panic {
-        panic!("ufbx::topo_next_vertex_edge() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::topo_next_vertex_edge() {}", panic.message());
     }
     result
 }
 
-pub fn topo_prev_vertex_edge(topo: &[TopoEdge], index: i32) -> i32 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+pub fn topo_prev_vertex_edge(topo: &[TopoEdge], index: u32) -> u32 {
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_topo_prev_vertex_edge(&mut panic, topo.as_ptr(), topo.len(), index) };
     if panic.did_panic {
-        panic!("ufbx::topo_prev_vertex_edge() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::topo_prev_vertex_edge() {}", panic.message());
     }
     result
 }
 
 pub fn get_weighted_face_normal(positions: &VertexVec3, face: Face) -> Vec3 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_get_weighted_face_normal(&mut panic, positions as *const VertexVec3, face) };
     if panic.did_panic {
-        panic!("ufbx::get_weighted_face_normal() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::get_weighted_face_normal() {}", panic.message());
     }
     result
 }
 
-pub fn generate_normal_mapping(mesh: &Mesh, topo: &[TopoEdge], normal_indices: &mut [i32], assume_smooth: bool) -> usize {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+pub fn generate_normal_mapping(mesh: &Mesh, topo: &[TopoEdge], normal_indices: &mut [u32], assume_smooth: bool) -> usize {
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_generate_normal_mapping(&mut panic, mesh as *const Mesh, topo.as_ptr(), topo.len(), normal_indices.as_mut_ptr(), normal_indices.len(), assume_smooth) };
     if panic.did_panic {
-        panic!("ufbx::generate_normal_mapping() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::generate_normal_mapping() {}", panic.message());
     }
     result
 }
 
-pub fn compute_normals(mesh: &Mesh, positions: &VertexVec3, normal_indices: &[i32], normals: &mut [Vec3]) {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+pub fn compute_normals(mesh: &Mesh, positions: &VertexVec3, normal_indices: &[u32], normals: &mut [Vec3]) {
+    let mut panic: Panic = Default::default();
     unsafe { ufbx_catch_compute_normals(&mut panic, mesh as *const Mesh, positions as *const VertexVec3, normal_indices.as_ptr(), normal_indices.len(), normals.as_mut_ptr(), normals.len()) };
     if panic.did_panic {
-        panic!("ufbx::compute_normals() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::compute_normals() {}", panic.message());
     }
 }
 
@@ -3041,26 +3926,6 @@ pub fn load_geometry_cache(filename: &str, opts: GeometryCacheOpts) -> Result<Ge
     let mut opts_mut = opts;
     let opts_raw = RawGeometryCacheOpts::from_rust(&mut opts_mut);
     unsafe { load_geometry_cache_raw(filename, &opts_raw) }
-}
-
-pub fn get_read_geometry_cache_real_num_data(frame: &CacheFrame) -> usize {
-    let result = unsafe { ufbx_get_read_geometry_cache_real_num_data(frame as *const CacheFrame) };
-    result
-}
-
-pub fn get_sample_geometry_cache_real_num_data(channel: &CacheChannel, time: f64) -> usize {
-    let result = unsafe { ufbx_get_sample_geometry_cache_real_num_data(channel as *const CacheChannel, time) };
-    result
-}
-
-pub fn get_read_geometry_cache_vec3_num_data(frame: &CacheFrame) -> usize {
-    let result = unsafe { ufbx_get_read_geometry_cache_vec3_num_data(frame as *const CacheFrame) };
-    result
-}
-
-pub fn get_sample_geometry_cache_vec3_num_data(channel: &CacheChannel, time: f64) -> usize {
-    let result = unsafe { ufbx_get_sample_geometry_cache_vec3_num_data(channel as *const CacheChannel, time) };
-    result
 }
 
 pub unsafe fn read_geometry_cache_real_raw(frame: &CacheFrame, data: &mut [Real], opts: &RawGeometryCacheDataOpts) -> usize {
@@ -3107,6 +3972,11 @@ pub fn sample_geometry_cache_vec3(channel: &CacheChannel, time: f64, data: &mut 
     unsafe { sample_geometry_cache_vec3_raw(channel, time, data, &opts_raw) }
 }
 
+pub fn dom_find<'a>(parent: &DomNode, name: &str) -> Option<&'a DomNode> {
+    let result = unsafe { ufbx_dom_find_len(parent as *const DomNode, name.as_ptr(), name.len()) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
 pub unsafe fn generate_indices_raw(streams: &[VertexStream], indices: &mut [u32], allocator: &RawAllocatorOpts) -> Result<usize> {
     let mut error: Error = Error::default();
     let result = { ufbx_generate_indices(streams.as_ptr(), streams.len(), indices.as_mut_ptr(), indices.len(), allocator as *const RawAllocatorOpts, &mut error) };
@@ -3123,53 +3993,37 @@ pub fn generate_indices(streams: &[VertexStream], indices: &mut [u32], allocator
 }
 
 pub fn get_vertex_real(v: &VertexReal, index: usize) -> Real {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_get_vertex_real(&mut panic, v as *const VertexReal, index) };
     if panic.did_panic {
-        panic!("ufbx::get_vertex_real() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::get_vertex_real() {}", panic.message());
     }
     result
 }
 
 pub fn get_vertex_vec2(v: &VertexVec2, index: usize) -> Vec2 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_get_vertex_vec2(&mut panic, v as *const VertexVec2, index) };
     if panic.did_panic {
-        panic!("ufbx::get_vertex_vec2() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::get_vertex_vec2() {}", panic.message());
     }
     result
 }
 
 pub fn get_vertex_vec3(v: &VertexVec3, index: usize) -> Vec3 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_get_vertex_vec3(&mut panic, v as *const VertexVec3, index) };
     if panic.did_panic {
-        panic!("ufbx::get_vertex_vec3() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::get_vertex_vec3() {}", panic.message());
     }
     result
 }
 
 pub fn get_vertex_vec4(v: &VertexVec4, index: usize) -> Vec4 {
-    let mut panic: Panic = Panic{
-        did_panic: false,
-        message_length: 0,
-        message: unsafe { mem::MaybeUninit::uninit().assume_init() },
-    };
+    let mut panic: Panic = Default::default();
     let result = unsafe { ufbx_catch_get_vertex_vec4(&mut panic, v as *const VertexVec4, index) };
     if panic.did_panic {
-        panic!("ufbx::get_vertex_vec4() {}", unsafe { str::from_utf8_unchecked(slice::from_raw_parts(&panic.message as *const _, panic.message_length)) });
+        panic!("ufbx::get_vertex_vec4() {}", panic.message());
     }
     result
 }
@@ -3177,6 +4031,206 @@ pub fn get_vertex_vec4(v: &VertexVec4, index: usize) -> Vec4 {
 pub fn get_triangulate_face_num_indices(face: Face) -> usize {
     let result = unsafe { ufbx_get_triangulate_face_num_indices(face) };
     result
+}
+
+pub fn as_unknown<'a>(element: &'a Element) -> Option<&'a Unknown> {
+    let result = unsafe { ufbx_as_unknown(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_node<'a>(element: &'a Element) -> Option<&'a Node> {
+    let result = unsafe { ufbx_as_node(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_mesh<'a>(element: &'a Element) -> Option<&'a Mesh> {
+    let result = unsafe { ufbx_as_mesh(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_light<'a>(element: &'a Element) -> Option<&'a Light> {
+    let result = unsafe { ufbx_as_light(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_camera<'a>(element: &'a Element) -> Option<&'a Camera> {
+    let result = unsafe { ufbx_as_camera(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_bone<'a>(element: &'a Element) -> Option<&'a Bone> {
+    let result = unsafe { ufbx_as_bone(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_empty<'a>(element: &'a Element) -> Option<&'a Empty> {
+    let result = unsafe { ufbx_as_empty(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_line_curve<'a>(element: &'a Element) -> Option<&'a LineCurve> {
+    let result = unsafe { ufbx_as_line_curve(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_nurbs_curve<'a>(element: &'a Element) -> Option<&'a NurbsCurve> {
+    let result = unsafe { ufbx_as_nurbs_curve(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_nurbs_surface<'a>(element: &'a Element) -> Option<&'a NurbsSurface> {
+    let result = unsafe { ufbx_as_nurbs_surface(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_nurbs_trim_surface<'a>(element: &'a Element) -> Option<&'a NurbsTrimSurface> {
+    let result = unsafe { ufbx_as_nurbs_trim_surface(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_nurbs_trim_boundary<'a>(element: &'a Element) -> Option<&'a NurbsTrimBoundary> {
+    let result = unsafe { ufbx_as_nurbs_trim_boundary(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_procedural_geometry<'a>(element: &'a Element) -> Option<&'a ProceduralGeometry> {
+    let result = unsafe { ufbx_as_procedural_geometry(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_stereo_camera<'a>(element: &'a Element) -> Option<&'a StereoCamera> {
+    let result = unsafe { ufbx_as_stereo_camera(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_camera_switcher<'a>(element: &'a Element) -> Option<&'a CameraSwitcher> {
+    let result = unsafe { ufbx_as_camera_switcher(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_marker<'a>(element: &'a Element) -> Option<&'a Marker> {
+    let result = unsafe { ufbx_as_marker(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_lod_group<'a>(element: &'a Element) -> Option<&'a LodGroup> {
+    let result = unsafe { ufbx_as_lod_group(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_skin_deformer<'a>(element: &'a Element) -> Option<&'a SkinDeformer> {
+    let result = unsafe { ufbx_as_skin_deformer(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_skin_cluster<'a>(element: &'a Element) -> Option<&'a SkinCluster> {
+    let result = unsafe { ufbx_as_skin_cluster(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_blend_deformer<'a>(element: &'a Element) -> Option<&'a BlendDeformer> {
+    let result = unsafe { ufbx_as_blend_deformer(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_blend_channel<'a>(element: &'a Element) -> Option<&'a BlendChannel> {
+    let result = unsafe { ufbx_as_blend_channel(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_blend_shape<'a>(element: &'a Element) -> Option<&'a BlendShape> {
+    let result = unsafe { ufbx_as_blend_shape(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_cache_deformer<'a>(element: &'a Element) -> Option<&'a CacheDeformer> {
+    let result = unsafe { ufbx_as_cache_deformer(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_cache_file<'a>(element: &'a Element) -> Option<&'a CacheFile> {
+    let result = unsafe { ufbx_as_cache_file(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_material<'a>(element: &'a Element) -> Option<&'a Material> {
+    let result = unsafe { ufbx_as_material(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_texture<'a>(element: &'a Element) -> Option<&'a Texture> {
+    let result = unsafe { ufbx_as_texture(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_video<'a>(element: &'a Element) -> Option<&'a Video> {
+    let result = unsafe { ufbx_as_video(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_shader<'a>(element: &'a Element) -> Option<&'a Shader> {
+    let result = unsafe { ufbx_as_shader(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_shader_binding<'a>(element: &'a Element) -> Option<&'a ShaderBinding> {
+    let result = unsafe { ufbx_as_shader_binding(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_anim_stack<'a>(element: &'a Element) -> Option<&'a AnimStack> {
+    let result = unsafe { ufbx_as_anim_stack(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_anim_layer<'a>(element: &'a Element) -> Option<&'a AnimLayer> {
+    let result = unsafe { ufbx_as_anim_layer(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_anim_value<'a>(element: &'a Element) -> Option<&'a AnimValue> {
+    let result = unsafe { ufbx_as_anim_value(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_anim_curve<'a>(element: &'a Element) -> Option<&'a AnimCurve> {
+    let result = unsafe { ufbx_as_anim_curve(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_display_layer<'a>(element: &'a Element) -> Option<&'a DisplayLayer> {
+    let result = unsafe { ufbx_as_display_layer(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_selection_set<'a>(element: &'a Element) -> Option<&'a SelectionSet> {
+    let result = unsafe { ufbx_as_selection_set(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_selection_node<'a>(element: &'a Element) -> Option<&'a SelectionNode> {
+    let result = unsafe { ufbx_as_selection_node(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_character<'a>(element: &'a Element) -> Option<&'a Character> {
+    let result = unsafe { ufbx_as_character(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_constraint<'a>(element: &'a Element) -> Option<&'a Constraint> {
+    let result = unsafe { ufbx_as_constraint(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_pose<'a>(element: &'a Element) -> Option<&'a Pose> {
+    let result = unsafe { ufbx_as_pose(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_metadata_object<'a>(element: &'a Element) -> Option<&'a MetadataObject> {
+    let result = unsafe { ufbx_as_metadata_object(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 pub fn identity_matrix() -> Matrix { unsafe { ufbx_identity_matrix } }
 pub fn identity_transform() -> Transform { unsafe { ufbx_identity_transform } }
@@ -3220,25 +4274,15 @@ impl Props {
         find_prop(&self, name)
     }
 
-    pub fn find_real(self: &Props, name: &str) -> Option<Real> {
-        find_real(self, name)
-    }
+    // TODO: find_real()
 
-    pub fn find_vec3(self: &Props, name: &str) -> Option<Vec3> {
-        find_vec3(self, name)
-    }
+    // TODO: find_vec3()
 
-    pub fn find_int(self: &Props, name: &str) -> Option<i64> {
-        find_int(self, name)
-    }
+    // TODO: find_int()
 
-    pub fn find_bool(self: &Props, name: &str) -> Option<bool> {
-        find_bool(self, name)
-    }
+    // TODO: find_bool()
 
-    pub fn find_string<'a>(self: &'a Props, name: &str) -> Option<&'a str> {
-        find_string(self, name)
-    }
+    // TODO: find_string()
 }
 
 impl Node {
@@ -3263,6 +4307,13 @@ impl Mesh {
     }
 }
 
+impl CoordinateAxes {
+    pub fn right_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_y_up } }
+    pub fn right_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_z_up } }
+    pub fn left_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_y_up } }
+    pub fn left_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_z_up } }
+}
+
 impl NurbsBasis {
 
     pub fn evaluate(&self, u: Real, weights: &mut [Real], derivatives: &mut [Real]) -> usize {
@@ -3275,6 +4326,10 @@ impl NurbsCurve {
     pub fn evaluate(&self, u: Real) -> CurvePoint {
         evaluate_nurbs_curve(&self, u)
     }
+
+    pub fn tessellate(&self, opts: TessellateCurveOpts) -> Result<LineCurveRoot> {
+        tessellate_nurbs_curve(&self, opts)
+    }
 }
 
 impl NurbsSurface {
@@ -3283,7 +4338,7 @@ impl NurbsSurface {
         evaluate_nurbs_surface(&self, u, v)
     }
 
-    pub fn tessellate(&self, opts: TessellateOpts) -> Result<MeshRoot> {
+    pub fn tessellate(&self, opts: TessellateSurfaceOpts) -> Result<MeshRoot> {
         tessellate_nurbs_surface(&self, opts)
     }
 }
@@ -3393,13 +4448,6 @@ impl AnimCurve {
     }
 }
 
-impl CoordinateAxes {
-    pub fn right_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_y_up } }
-    pub fn right_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_right_handed_z_up } }
-    pub fn left_handed_y_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_y_up } }
-    pub fn left_handed_z_up() -> CoordinateAxes { unsafe { ufbx_axes_left_handed_z_up } }
-}
-
 impl Scene {
 
     pub fn find_element<'a>(&'a self, type_: ElementType, name: &str) -> Option<&'a Element> {
@@ -3435,6 +4483,7 @@ pub enum ElementData<'a> {
     ProceduralGeometry(&'a ProceduralGeometry),
     StereoCamera(&'a StereoCamera),
     CameraSwitcher(&'a CameraSwitcher),
+    Marker(&'a Marker),
     LodGroup(&'a LodGroup),
     SkinDeformer(&'a SkinDeformer),
     SkinCluster(&'a SkinCluster),
@@ -3480,6 +4529,7 @@ impl Element {
                 ElementType::ProceduralGeometry => ElementData::ProceduralGeometry(&*(self as *const _ as *const ProceduralGeometry)),
                 ElementType::StereoCamera => ElementData::StereoCamera(&*(self as *const _ as *const StereoCamera)),
                 ElementType::CameraSwitcher => ElementData::CameraSwitcher(&*(self as *const _ as *const CameraSwitcher)),
+                ElementType::Marker => ElementData::Marker(&*(self as *const _ as *const Marker)),
                 ElementType::LodGroup => ElementData::LodGroup(&*(self as *const _ as *const LodGroup)),
                 ElementType::SkinDeformer => ElementData::SkinDeformer(&*(self as *const _ as *const SkinDeformer)),
                 ElementType::SkinCluster => ElementData::SkinCluster(&*(self as *const _ as *const SkinCluster)),

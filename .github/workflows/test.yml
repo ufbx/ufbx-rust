@@ -1,0 +1,29 @@
+name: Test
+
+on:
+  workflow_call:
+    inputs:
+      ufbx-sha:
+        required: false
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+      - name: Update ufbx
+        if: {{ inputs.ufbx-sha }}
+        run: python3 sfs.py --verbose update ufbx={{ inputs.ufbx-sha }} --overwrite
+      - name: Parse ufbx
+        run: |
+          python3 bindgen/ufbx_parser.py -i ufbx/ufbx.h
+          python3 bindgen/ufbx_ir.py
+      - name: Generate source
+        run: python3 bindgen/generate_rust.py
+      - name: Build
+        run: cargo build
+      - name: Test
+        run: cargo test

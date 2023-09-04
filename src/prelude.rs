@@ -9,8 +9,9 @@ use std::fs::File;
 use std::mem;
 use std::ptr::NonNull;
 use std::fmt::{self, Debug, Display, Formatter};
-use crate::generated::{RawStream, RawAllocator, Progress, ProgressResult, Error};
-use crate::generated::{format_error};
+use crate::OpenFileInfo;
+use crate::generated::{RawStream, RawAllocator, Progress, ProgressResult, Error, Vec2, Vec3, Vec4};
+use crate::generated::format_error;
 
 pub type Real = f64;
 
@@ -63,6 +64,7 @@ pub struct RefList<T> {
 }
 
 impl<T> RefList<T> {
+    #[allow(dead_code)]
     pub(crate) unsafe fn as_static_ref(&self) -> &'static [Ref<T>] {
         slice::from_raw_parts(self.data, self.count)
     }
@@ -152,6 +154,31 @@ impl RawString {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RawBlob {
+    pub data: *const u8,
+    pub length: usize,
+}
+
+impl Default for RawBlob {
+    fn default() -> Self {
+        RawBlob {
+            data: ptr::null(),
+            length: 0,
+        }
+    }
+}
+
+impl RawBlob {
+    pub fn from_rust(s: &mut Option<&[u8]>) -> RawBlob {
+        match s {
+            Some(s) => RawBlob { data: s.as_ptr(), length: s.len() },
+            None => Default::default(),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct OptionRef<T> {
     ptr: *const T,
     _marker: PhantomData<T>,
@@ -234,6 +261,8 @@ pub trait AllocatorInterface {
     fn free_allocator(&mut self) { }
 }
 
+#[repr(transparent)]
+#[derive(Default)]
 pub struct Unsafe<T>(T);
 
 impl<T> Unsafe<T> {
@@ -249,11 +278,11 @@ pub trait StreamInterface {
     fn skip(&mut self, bytes: usize) -> bool {
         #![allow(deprecated)]
         unsafe {
-            let mut local_buf: [u8; 512] = std::mem::uninitialized();
+            let mut local_buf: [mem::MaybeUninit<u8>; 512] = mem::MaybeUninit::uninit().assume_init();
             let mut left = bytes;
             while left > 0 {
                 let to_read = min(left, local_buf.len());
-                let num_read = self.read(&mut local_buf[0..to_read]).unwrap_or(0);
+                let num_read = self.read(mem::transmute(&mut local_buf[0..to_read])).unwrap_or(0);
                 if num_read != to_read { return false }
                 left -= num_read
             }
@@ -483,8 +512,8 @@ pub unsafe extern "C" fn call_progress_cb<F>(user: *mut c_void, progress: *const
     (func)(&*progress)
 }
 
-pub unsafe extern "C" fn call_open_file_cb<F>(user: *mut c_void, dst: *mut RawStream, path: *const u8, path_len: usize) -> bool
-    where F: FnMut(&str) -> Option<Stream>
+pub unsafe extern "C" fn call_open_file_cb<F>(user: *mut c_void, dst: *mut RawStream, path: *const u8, path_len: usize, info: *const OpenFileInfo) -> bool
+    where F: FnMut(&str, &OpenFileInfo) -> Option<Stream>
 {
     let func: &mut F = &mut *(user as *mut F);
 
@@ -493,7 +522,7 @@ pub unsafe extern "C" fn call_open_file_cb<F>(user: *mut c_void, dst: *mut RawSt
         Err(_) => return false,
     };
 
-    let mut stream = match (func)(path_str) {
+    let mut stream = match (func)(path_str, &*info) {
         Some(stream) => stream,
         None => return false,
     };
@@ -502,13 +531,31 @@ pub unsafe extern "C" fn call_open_file_cb<F>(user: *mut c_void, dst: *mut RawSt
     true
 }
 
+pub unsafe extern "C" fn call_close_memory_cb<F>(user: *mut c_void, data: *mut c_void, data_size: usize)
+    where F: FnMut(*mut c_void, usize) -> ()
+{
+    let func: &mut F = &mut *(user as *mut F);
+    (func)(data, data_size)
+}
+
+#[repr(transparent)]
+pub struct InlineBuf<T> {
+    pub data: mem::MaybeUninit<T>,
+}
+
+impl<T> Default for InlineBuf<T> {
+    fn default() -> Self {
+        Self { data: mem::MaybeUninit::uninit() }
+    }
+}
+
 impl Debug for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         #![allow(deprecated)]
         unsafe {
-            let mut local_buf: [u8; 1024] = std::mem::uninitialized();
-            let length = format_error(&mut local_buf, self);
-            f.write_str(str::from_utf8_unchecked(&local_buf[..length]))
+            let mut local_buf: [mem::MaybeUninit<u8>; 1024] = mem::MaybeUninit::uninit().assume_init();
+            let length = format_error(mem::transmute(local_buf.as_mut_slice()), self);
+            f.write_str(str::from_utf8_unchecked(mem::transmute(&local_buf[..length])))
         }
     }
 }
@@ -538,6 +585,57 @@ impl<'a, T> Deref for ExternalRef<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.data
+    }
+}
+
+pub fn format_flags(f: &mut fmt::Formatter<'_>, names: &[(&str, u32)], value: u32) -> fmt::Result {
+    let mut has_any = false;
+
+    for (name, v) in names {
+        if (value & v) != 0 {
+            let prefix = if has_any { "|" } else { "" };
+            has_any = true;
+            write!(f, "{}{}", prefix, name)?;
+        }
+    }
+
+    if !has_any {
+            write!(f, "NONE")?;
+    }
+
+    Ok(())
+}
+
+impl fmt::Display for Vec2 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match (f.precision(), f.sign_plus()) {
+            (None, false) => write!(f, "({}, {})", self.x, self.y),
+            (None, true) => write!(f, "({:+}, {:+})", self.x, self.y),
+            (Some(p), false) => write!(f, "({1:.0$}, {2:.0$})", p, self.x, self.y),
+            (Some(p), true) => write!(f, "({1:+.0$}, {2:+.0$})", p, self.x, self.y),
+        }
+    }
+}
+
+impl fmt::Display for Vec3 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match (f.precision(), f.sign_plus()) {
+            (None, false) => write!(f, "({}, {}, {})", self.x, self.y, self.z),
+            (None, true) => write!(f, "({:+}, {:+}, {:+})", self.x, self.y, self.z),
+            (Some(p), false) => write!(f, "({1:.0$}, {2:.0$}, {3:.0$})", p, self.x, self.y, self.z),
+            (Some(p), true) => write!(f, "({1:+.0$}, {2:+.0$}, {3:+.0$})", p, self.x, self.y, self.z),
+        }
+    }
+}
+
+impl fmt::Display for Vec4 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match (f.precision(), f.sign_plus()) {
+            (None, false) => write!(f, "({}, {}, {}, {})", self.x, self.y, self.z, self.w),
+            (None, true) => write!(f, "({:+}, {:+}, {:+}, {})", self.x, self.y, self.z, self.w),
+            (Some(p), false) => write!(f, "({1:.0$}, {2:.0$}, {3:.0$}, {4:.0$})", p, self.x, self.y, self.z, self.w),
+            (Some(p), true) => write!(f, "({1:+.0$}, {2:+.0$}, {3:+.0$}, {4:+.0$})", p, self.x, self.y, self.z, self.w),
+        }
     }
 }
 
