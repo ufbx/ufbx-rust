@@ -15,7 +15,7 @@ jobs:
         with:
           fetch-depth: 2
       - name: Update ufbx
-        if: {{ inputs.ufbx-sha }}
+        if: inputs.ufbx-sha
         run: python3 sfs.py --verbose update ufbx={{ inputs.ufbx-sha }} --overwrite
       - name: Parse ufbx
         run: |
