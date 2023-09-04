@@ -14,4 +14,4 @@ concurrency:
 
 jobs:
   ci_test:
-    uses: ./.github/workflows/test@main
+    uses: ./.github/workflows/test
