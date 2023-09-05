@@ -3,7 +3,10 @@ name: Test
 on:
   workflow_call:
     inputs:
-      ufbx-sha:
+      ufbx-rust-ref:
+        required: true
+        type: string
+      ufbx-ref:
         required: false
         type: string
 
@@ -13,10 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
+          repository: ufbx/ufbx-rust
+          ref: ${{ inputs.ufbx-rust-ref }}
           fetch-depth: 2
       - name: Update ufbx
-        if: inputs.ufbx-sha
-        run: python3 sfs.py --verbose update ufbx={{ inputs.ufbx-sha }} --overwrite
+        if: inputs.ufbx-ref
+        run: python3 sfs.py --verbose update ufbx=${{ inputs.ufbx-ref }} --overwrite
       - name: Parse ufbx
         run: |
           python3 bindgen/ufbx_parser.py -i ufbx/ufbx.h
