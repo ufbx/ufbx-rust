@@ -500,8 +500,8 @@ pub struct Face {
 }
 
 #[repr(C)]
-pub struct MeshMaterial {
-    pub material: Option<Ref<Material>>,
+pub struct MeshPart {
+    pub index: u32,
     pub num_faces: usize,
     pub num_triangles: usize,
     pub num_empty_faces: usize,
@@ -514,9 +514,6 @@ pub struct MeshMaterial {
 pub struct FaceGroup {
     pub id: i32,
     pub name: String,
-    pub num_faces: usize,
-    pub num_triangles: usize,
-    pub face_indices: List<u32>,
 }
 
 #[repr(C)]
@@ -604,8 +601,10 @@ pub struct Mesh {
     pub vertex_crease: VertexReal,
     pub uv_sets: List<UvSet>,
     pub color_sets: List<ColorSet>,
-    pub materials: List<MeshMaterial>,
+    pub materials: RefList<Material>,
     pub face_groups: List<FaceGroup>,
+    pub material_parts: List<MeshPart>,
+    pub face_group_parts: List<MeshPart>,
     pub skinned_is_local: bool,
     pub skinned_position: VertexVec3,
     pub skinned_normal: VertexVec3,
@@ -1938,7 +1937,6 @@ pub struct Metadata {
     pub version: u32,
     pub file_format: FileFormat,
     pub may_contain_no_index: bool,
-    pub may_contain_null_materials: bool,
     pub may_contain_missing_vertex_position: bool,
     pub may_contain_broken_elements: bool,
     pub is_unsafe: bool,
@@ -2477,6 +2475,7 @@ pub struct RawLoadOpts {
     pub load_external_files: bool,
     pub ignore_missing_external_files: bool,
     pub skip_skin_vertices: bool,
+    pub skip_mesh_parts: bool,
     pub clean_skin_weights: bool,
     pub disable_quirks: bool,
     pub strict: bool,
@@ -2484,7 +2483,6 @@ pub struct RawLoadOpts {
     pub index_error_handling: IndexErrorHandling,
     pub connect_broken_elements: bool,
     pub allow_nodes_out_of_root: bool,
-    pub allow_null_material: bool,
     pub allow_missing_vertex_position: bool,
     pub allow_empty_faces: bool,
     pub generate_missing_normals: bool,
@@ -2579,6 +2577,7 @@ pub struct RawTessellateSurfaceOpts {
     pub result_allocator: RawAllocatorOpts,
     pub span_subdivision_u: u32,
     pub span_subdivision_v: u32,
+    pub skip_mesh_parts: bool,
     pub _end_zero: u32,
 }
 
@@ -2783,6 +2782,7 @@ pub struct LoadOpts<'a> {
     pub load_external_files: bool,
     pub ignore_missing_external_files: bool,
     pub skip_skin_vertices: bool,
+    pub skip_mesh_parts: bool,
     pub clean_skin_weights: bool,
     pub disable_quirks: bool,
     pub strict: bool,
@@ -2790,7 +2790,6 @@ pub struct LoadOpts<'a> {
     pub index_error_handling: IndexErrorHandling,
     pub connect_broken_elements: bool,
     pub allow_nodes_out_of_root: bool,
-    pub allow_null_material: bool,
     pub allow_missing_vertex_position: bool,
     pub allow_empty_faces: bool,
     pub generate_missing_normals: bool,
@@ -2845,6 +2844,7 @@ impl RawLoadOpts {
             load_external_files: arg.load_external_files,
             ignore_missing_external_files: arg.ignore_missing_external_files,
             skip_skin_vertices: arg.skip_skin_vertices,
+            skip_mesh_parts: arg.skip_mesh_parts,
             clean_skin_weights: arg.clean_skin_weights,
             disable_quirks: arg.disable_quirks,
             strict: arg.strict,
@@ -2852,7 +2852,6 @@ impl RawLoadOpts {
             index_error_handling: arg.index_error_handling,
             connect_broken_elements: arg.connect_broken_elements,
             allow_nodes_out_of_root: arg.allow_nodes_out_of_root,
-            allow_null_material: arg.allow_null_material,
             allow_missing_vertex_position: arg.allow_missing_vertex_position,
             allow_empty_faces: arg.allow_empty_faces,
             generate_missing_normals: arg.generate_missing_normals,
@@ -2945,6 +2944,7 @@ pub struct TessellateSurfaceOpts {
     pub result_allocator: AllocatorOpts,
     pub span_subdivision_u: u32,
     pub span_subdivision_v: u32,
+    pub skip_mesh_parts: bool,
 }
 
 impl RawTessellateSurfaceOpts {
@@ -2955,6 +2955,7 @@ impl RawTessellateSurfaceOpts {
             result_allocator: RawAllocatorOpts::from_rust(&mut arg.result_allocator),
             span_subdivision_u: arg.span_subdivision_u,
             span_subdivision_v: arg.span_subdivision_v,
+            skip_mesh_parts: arg.skip_mesh_parts,
             _end_zero: 0,
         }
     }
