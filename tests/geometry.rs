@@ -1,5 +1,5 @@
 use std::panic;
-use panic_message::{panic_message};
+use panic_message::panic_message;
 use ufbx;
 
 #[test]
