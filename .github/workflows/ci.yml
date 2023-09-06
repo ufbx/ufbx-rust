@@ -26,6 +26,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: grcov
+      - name: Setup llvm-tools-preview
+        run: rustup component add llvm-tools-preview
       - name: Generate coverage
         run: bash misc/test_coverage.sh
       - uses: codecov/codecov-action@v3
