@@ -90,11 +90,3 @@ pub fn triangulate_face_vec(mut indices: &mut Vec<u32>, mesh: &Mesh, face: Face)
     indices.shrink_to(num_triangles as usize * 3);
     num_triangles
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        
-    }
-}
