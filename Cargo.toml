@@ -20,5 +20,8 @@ resolver = "2"
 [dependencies]
 mint = { version = "0.5.8", optional = true, default-features = false }
 
+[dev-dependencies]
+panic-message = "0.3.0"
+
 [build-dependencies]
 cc = "1.0"

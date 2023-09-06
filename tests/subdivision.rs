@@ -1,4 +1,4 @@
-use ufbx;
+use ufbx::{self, AllocatorOpts};
 
 fn distance(a: ufbx::Vec3, b: ufbx::Vec3) -> f64 {
     let dx = a.x - b.x;
@@ -53,4 +53,27 @@ fn cube_subdivision() {
         assert!(found, "{} not found", pos);
     }
     assert!(ref_points.len() == 0);
+}
+
+
+#[test]
+fn subdivision_fail() {
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", Default::default())
+        .expect("expected to load scene");
+
+    let node = scene.find_node("Cube").expect("expected to find 'Cube'");
+    let mesh = node.mesh.as_ref().expect("expected 'Cube' to have mesh");
+
+    let sub_opts = ufbx::SubdivideOpts {
+        result_allocator: AllocatorOpts {
+            memory_limit: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let err = mesh.subdivide(1, sub_opts)
+        .err().expect("expected subdivision to fail");
+
+    assert_eq!(err.type_, ufbx::ErrorType::MemoryLimit);
+    assert!(err.info() == "result");
 }
