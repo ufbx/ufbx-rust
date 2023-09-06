@@ -34,5 +34,5 @@ fn not_found() {
         .err().expect("expected loading 'not_found.fbx' to fail");
     assert!(err.description.contains("File not found"));
     assert!(err.info().contains("not_found.fbx"));
-    assert_eq!(err.type_, ufbx::ErrorType::FileNotFoun);
+    assert_eq!(err.type_, ufbx::ErrorType::FileNotFound);
 }
