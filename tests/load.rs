@@ -1,10 +1,7 @@
+use std::{fs::File, io::{BufReader, Read}};
 use ufbx;
 
-#[test]
-fn blender_default() {
-    let scene = ufbx::load_file("tests/data/blender_default.fbx", ufbx::LoadOpts::default())
-        .expect("expected to load scene");
-
+fn check_blender_default(scene: &ufbx::Scene) {
     {
         let node = scene.find_node("Cube").expect("expected to find 'Cube'");
         let mesh = node.mesh.as_ref().expect("expected 'Cube' to have a mesh");
@@ -26,6 +23,48 @@ fn blender_default() {
         let camera = node.camera.as_ref().expect("expected 'Camera' to have a camera");
         assert_eq!(camera.projection_mode, ufbx::ProjectionMode::Perspective);
     }
+}
+
+fn read_file(path: &str) -> Vec<u8> {
+    let file = File::open(path).expect("could not find file");
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::<u8>::new();
+    reader.read_to_end(&mut buffer).expect("failed to read");
+    buffer
+}
+
+#[test]
+fn blender_default() {
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
+#[test]
+fn blender_default_memory() {
+    let data = read_file("tests/data/blender_default.fbx");
+    let scene = ufbx::load_memory(&data, ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
+#[test]
+fn blender_default_file() {
+    let path = "tests/data/blender_default.fbx";
+    let file = File::open(path).expect("could not find file");
+    let scene = ufbx::load_stream(ufbx::Stream::Read(Box::new(file)), ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
+#[test]
+fn blender_default_reader() {
+    let path = "tests/data/blender_default.fbx";
+    let file = File::open(path).expect("could not find file");
+    let reader = BufReader::new(file);
+    let scene = ufbx::load_stream(ufbx::Stream::Read(Box::new(reader)), ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+    check_blender_default(&scene);
 }
 
 #[test]
