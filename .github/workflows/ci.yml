@@ -18,7 +18,7 @@ jobs:
     with:
       ufbx-rust-ref: ${{ github.ref }}
   ci_coverage:
-    run-on: ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: taiki-e/install-action@v2
         with:
