@@ -1,8 +1,8 @@
-use ufbx::{self, LoadOpts};
+use ufbx;
 
 #[test]
 fn blender_default() {
-    let scene = ufbx::load_file("tests/data/blender_default.fbx", LoadOpts::default())
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", ufbx::LoadOpts::default())
         .expect("expected to load scene");
 
     {
@@ -30,7 +30,7 @@ fn blender_default() {
 
 #[test]
 fn not_found() {
-    let err = ufbx::load_file("tests/data/not_found.fbx", LoadOpts::default())
+    let err = ufbx::load_file("tests/data/not_found.fbx", ufbx::LoadOpts::default())
         .err().expect("expected loading 'not_found.fbx' to fail");
     assert!(err.description.contains("File not found"));
     assert!(err.info().contains("not_found.fbx"));
