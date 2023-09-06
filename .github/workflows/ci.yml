@@ -17,3 +17,17 @@ jobs:
     uses: ./.github/workflows/test.yml
     with:
       ufbx-rust-ref: ${{ github.ref }}
+  ci_coverage:
+    run-on: ubuntu-latest
+    steps:
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: grcov
+      - name: Generate coverage
+        run: bash misc/test_coverage.sh
+      - uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: build/coverage.lcov
+          verbose: true
+
