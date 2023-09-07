@@ -99,3 +99,39 @@ fn generate_indices_multi_stream() {
     positions.shrink_to(result);
     normals.shrink_to(result);
 }
+
+#[test]
+fn generate_indices_truncated() {
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+
+    let node = scene.find_node("Cube").expect("expected to find 'Cube'");
+    let mesh = node.mesh.as_ref().expect("expected 'Cube' to have a mesh");
+
+    let mut positions: Vec<ufbx::Vec3> = Vec::new();
+    let mut normals: Vec<ufbx::Vec3> = Vec::new();
+
+    let mut tri_indices = Vec::new();
+    for &face in &mesh.faces {
+        ufbx::triangulate_face_vec(&mut tri_indices, &mesh, face);
+        for &ix in &tri_indices {
+            let position = mesh.vertex_position[ix as usize];
+            let normal = mesh.vertex_normal[ix as usize];
+            positions.push(position);
+            normals.push(normal);
+        }
+    }
+
+    normals.pop();
+
+    let mut indices = vec![0u32; positions.len()];
+    let mut streams = [
+        VertexStream::new(&mut positions),
+        VertexStream::new(&mut normals),
+    ];
+    let err = ufbx::generate_indices(&mut streams, &mut indices, AllocatorOpts::default())
+        .err().expect("expected generate_indices() to fail");
+
+    assert_eq!(err.type_, ufbx::ErrorType::TruncatedVertexStream);
+    assert_eq!(err.info(), "1");
+}

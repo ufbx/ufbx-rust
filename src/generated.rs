@@ -2319,12 +2319,13 @@ pub enum ErrorType {
     UnrecognizedFileFormat = 10,
     UninitializedOptions = 11,
     ZeroVertexSize = 12,
-    InvalidUtf8 = 13,
-    FeatureDisabled = 14,
-    BadNurbs = 15,
-    BadIndex = 16,
-    UnsafeOptions = 17,
-    DuplicateOverride = 18,
+    TruncatedVertexStream = 13,
+    InvalidUtf8 = 14,
+    FeatureDisabled = 15,
+    BadNurbs = 16,
+    BadIndex = 17,
+    UnsafeOptions = 18,
+    DuplicateOverride = 19,
 }
 
 impl Default for ErrorType {
