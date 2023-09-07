@@ -3687,14 +3687,6 @@ pub fn create_anim(scene: &Scene, opts: &AnimOpts) -> Result<AnimRoot> {
     Ok(AnimRoot::new(result))
 }
 
-pub fn retain_anim(anim: &mut Anim) {
-    unsafe { ufbx_retain_anim(anim as *mut Anim) };
-}
-
-pub fn free_anim(anim: &mut Anim) {
-    unsafe { ufbx_free_anim(anim as *mut Anim) };
-}
-
 pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> Option<&'a Texture> {
     let result = unsafe { ufbx_find_prop_texture_len(material as *const Material, name.as_ptr(), name.len()) };
     if result.is_null() { None } else { unsafe { Some(&*result) } }
