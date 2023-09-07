@@ -4310,6 +4310,13 @@ impl Matrix {
     pub fn identity() -> Matrix { unsafe { ufbx_identity_matrix } }
 }
 
+impl DomNode {
+
+    pub fn find<'a>(&'a self, name: &str) -> Option<&'a DomNode> {
+        dom_find(&self, name)
+    }
+}
+
 impl Props {
 
     pub fn find_prop<'a>(&'a self, name: &str) -> Option<&'a Prop> {

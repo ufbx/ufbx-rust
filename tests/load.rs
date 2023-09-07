@@ -206,3 +206,21 @@ fn not_found() {
     assert!(err.info().contains("not_found.fbx"));
     assert_eq!(err.type_, ufbx::ErrorType::FileNotFound);
 }
+
+#[test]
+fn load_dom() {
+    let opts = ufbx::LoadOpts {
+        retain_dom: true,
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .expect("expected to load scene");
+    let dom_root = scene.dom_root.as_ref().expect("expected to have dom_root");
+    let header = dom_root.find("FBXHeaderExtension")
+        .expect("expected to find FBXHeaderExtension");
+    let version = header.find("FBXVersion")
+        .expect("expected to find FBXVersion");
+    let version_value = version.values.get(0)
+        .expect("expected FBXVersion to have a value");
+    assert_eq!(version_value.value_int, 7400);
+}
