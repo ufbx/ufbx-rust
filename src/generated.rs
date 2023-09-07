@@ -2,7 +2,7 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, format_flags};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, VertexStream, format_flags};
 use crate::prelude::{Allocator, Stream, call_open_file_cb, call_close_memory_cb, call_progress_cb};
 
 #[repr(C)]
@@ -2174,8 +2174,9 @@ pub struct TopoEdge {
 }
 
 #[repr(C)]
-pub struct VertexStream {
-    pub data: *const c_void,
+pub struct RawVertexStream {
+    pub data: *mut c_void,
+    pub vertex_count: usize,
     pub vertex_size: usize,
 }
 
@@ -3156,7 +3157,7 @@ extern "C" {
     pub fn ufbx_read_geometry_cache_vec3(frame: *const CacheFrame, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_sample_geometry_cache_vec3(channel: *const CacheChannel, time: f64, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_dom_find_len(parent: *const DomNode, name: *const u8, name_len: usize) -> *mut DomNode;
-    pub fn ufbx_generate_indices(streams: *const VertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
+    pub fn ufbx_generate_indices(streams: *const RawVertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
     pub fn ufbx_catch_get_vertex_real(panic: *mut Panic, v: *const VertexReal, index: usize) -> Real;
     pub fn ufbx_catch_get_vertex_vec2(panic: *mut Panic, v: *const VertexVec2, index: usize) -> Vec2;
     pub fn ufbx_catch_get_vertex_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Vec3;
@@ -4015,7 +4016,7 @@ pub fn dom_find<'a>(parent: &DomNode, name: &str) -> Option<&'a DomNode> {
     if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
-pub unsafe fn generate_indices_raw(streams: &[VertexStream], indices: &mut [u32], allocator: &RawAllocatorOpts) -> Result<usize> {
+pub unsafe fn generate_indices_raw(streams: &[RawVertexStream], indices: &mut [u32], allocator: &RawAllocatorOpts) -> Result<usize> {
     let mut error: Error = Error::default();
     let result = { ufbx_generate_indices(streams.as_ptr(), streams.len(), indices.as_mut_ptr(), indices.len(), allocator as *const RawAllocatorOpts, &mut error) };
     if error.type_ != ErrorType::None {
@@ -4024,10 +4025,12 @@ pub unsafe fn generate_indices_raw(streams: &[VertexStream], indices: &mut [u32]
     Ok(result)
 }
 
-pub fn generate_indices(streams: &[VertexStream], indices: &mut [u32], allocator: AllocatorOpts) -> Result<usize> {
+pub fn generate_indices(streams: &mut [VertexStream], indices: &mut [u32], allocator: AllocatorOpts) -> Result<usize> {
+    let mut streams_mut = streams;
+    let streams_raw = RawVertexStream::from_rust(&mut streams_mut);
     let mut allocator_mut = allocator;
     let allocator_raw = RawAllocatorOpts::from_rust(&mut allocator_mut);
-    unsafe { generate_indices_raw(streams, indices, &allocator_raw) }
+    unsafe { generate_indices_raw(&streams_raw, indices, &allocator_raw) }
 }
 
 pub fn get_vertex_real(v: &VertexReal, index: usize) -> Real {

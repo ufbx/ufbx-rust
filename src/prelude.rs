@@ -10,7 +10,7 @@ use std::mem;
 use std::ptr::NonNull;
 use std::fmt::{self, Debug, Display, Formatter};
 use crate::OpenFileInfo;
-use crate::generated::{RawStream, RawAllocator, Progress, ProgressResult, Error, Vec2, Vec3, Vec4};
+use crate::generated::{RawStream, RawAllocator, RawVertexStream, Progress, ProgressResult, Error, Vec2, Vec3, Vec4};
 use crate::generated::format_error;
 
 pub type Real = f64;
@@ -428,6 +428,34 @@ impl RawAllocator {
         },
         Allocator::Raw(raw) => raw.take(),
         }
+    }
+}
+
+pub struct VertexStream<'a> {
+    pub(crate) data: *mut c_void,
+    pub vertex_count: usize,
+    pub vertex_size: usize,
+    _marker: PhantomData<&'a mut ()>,
+}
+
+impl VertexStream<'static> {
+    pub fn new<T: Copy + Sized>(data: &mut [T]) -> VertexStream {
+        return VertexStream {
+            data: data.as_mut_ptr() as *mut c_void,
+            vertex_count: data.len(),
+            vertex_size: mem::size_of::<T>(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl RawVertexStream {
+    pub fn from_rust(streams: &mut [VertexStream]) -> Vec<RawVertexStream> {
+        streams.iter().map(|s| RawVertexStream {
+            data: s.data,
+            vertex_count: s.vertex_count,
+            vertex_size: s.vertex_size,
+        }).collect()
     }
 }
 

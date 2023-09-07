@@ -10,7 +10,7 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, format_flags};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, VertexStream, format_flags};
 """.strip()
 
 post_ffi = r"""
@@ -219,6 +219,10 @@ alloc_types = {
     "anim": "AnimRoot",
 }
 
+raw_types = {
+    "ufbx_vertex_stream",
+}
+
 callback_signatures = {
     "ufbx_open_file_cb": "(&str, &OpenFileInfo) -> Option<Stream>",
     "ufbx_close_memory_cb": "(*mut c_void, usize) -> ()",
@@ -258,6 +262,10 @@ ignore_non_raw = {
     "ufbx_open_file",
     "ufbx_open_memory",
     "ufbx_default_open_file",
+}
+
+force_mut_args = {
+    ("ufbx_generate_indices", 0),
 }
 
 override_functions = { }
@@ -344,7 +352,7 @@ pub fn find_shader_prop<'a>(&'a self, name: &'a str) -> &'a str {
 
 def get_struct_name(st: ir.Struct):
     name = ir.to_pascal(st.short_name)
-    if st.is_input or st.is_callback or st.is_interface:
+    if st.is_input or st.is_callback or st.is_interface or st.name in raw_types:
         name = "Raw" + name
     return name
 
@@ -492,7 +500,7 @@ class RustType:
             else:
                 return self.name
 
-    def fmt_arg(self, lifetime="", force_const=False):
+    def fmt_arg(self, lifetime="", force_const=False, non_raw=False):
         if self.is_result:
             return f"Result<{self.inner.fmt_arg(lifetime)}>"
         elif self.is_function:
@@ -519,6 +527,8 @@ class RustType:
             if self.needs_lifetime:
                 lt = f"<'{lifetime}>" if lifetime else ""
                 return f"{self.name}{lt}"
+            elif self.is_raw and non_raw:
+                return self.rust_name
             else:
                 return self.name
 
@@ -625,7 +635,7 @@ class RustArgument:
         self.is_raw = leaf.is_raw
         self.original_index = original_index
 
-    def fmt_arg(self, lifetime: str, non_raw: bool = False) -> str:
+    def fmt_arg(self, lifetime: str, non_raw: bool = False, force_mut: bool = False) -> str:
         if not self.ir.return_ref:
             lifetime = ""
         if self.kind == "string":
@@ -634,8 +644,8 @@ class RustArgument:
             mut = "" if self.is_const else "mut "
             return f"{self.name}: &{mut}[u8]"
         elif self.kind == "slice":
-            mut = "" if self.is_const else "mut "
-            return f"{self.name}: &{mut}[{self.type.fmt_arg(lifetime)}]"
+            mut = "" if self.is_const and not force_mut else "mut "
+            return f"{self.name}: &{mut}[{self.type.fmt_arg(lifetime, non_raw=non_raw)}]"
         elif non_raw and self.is_raw:
             leaf = self.type.get_leaf()
             return f"{self.name}: {leaf.rust_name}"
@@ -742,7 +752,7 @@ def init_struct(st: ir.Struct):
         init_fields(rs, field)
     structs[st.name] = rs
 
-    if rs.ir.is_callback or rs.ir.is_input or rs.ir.is_interface:
+    if rs.ir.is_callback or rs.ir.is_input or rs.ir.is_interface or rs.ir.name in raw_types:
         rs.is_raw = True
         types[rs.ir.name].is_raw = True
 
@@ -1231,7 +1241,10 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
     lt = "<'a>" if needs_ref else ""
     lifetime = "a" if needs_ref else ""
 
-    arg_str = ", ".join(arg.fmt_arg(lifetime, non_raw) for arg in rf.args)
+    arg_str = ", ".join(
+        arg.fmt_arg(lifetime, non_raw,
+            force_mut = non_raw and (rf.ir.name, ix) in force_mut_args
+        ) for ix, arg in enumerate(rf.args))
 
     arg_pass = []
     for arg in rf.args:
