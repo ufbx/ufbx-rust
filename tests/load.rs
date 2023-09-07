@@ -69,6 +69,24 @@ fn blender_default_reader() {
     check_blender_default(&scene);
 }
 
+struct ByteReader<R: Read>(R);
+
+impl<R: Read> ufbx::StreamInterface for ByteReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
+        self.0.read(&mut buf[0..1]).ok()
+    }
+}
+
+#[test]
+fn blender_default_custom_stream() {
+    let path = "tests/data/blender_default.fbx";
+    let file = File::open(path).expect("could not find file");
+    let reader = ByteReader(BufReader::new(file));
+    let scene = ufbx::load_stream(ufbx::Stream::Box(Box::new(reader)), ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
 #[test]
 fn blender_default_reader_prefix() {
     let path = "tests/data/blender_default.fbx";
