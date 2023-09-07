@@ -3,11 +3,13 @@ use std::ffi::{CString, c_void};
 use ufbx;
 use libc;
 
-fn check_blender_default(scene: &ufbx::Scene) {
+fn check_blender_default(scene: &ufbx::Scene, ignore_geometry: bool) {
     {
         let node = scene.find_node("Cube").expect("expected to find 'Cube'");
         let mesh = node.mesh.as_ref().expect("expected 'Cube' to have a mesh");
-        assert_eq!(mesh.num_faces, 6);
+        if !ignore_geometry {
+            assert_eq!(mesh.num_faces, 6);
+        }
 
         let mesh_material = &mesh.materials[0];
         let node_material = &node.materials[0];
@@ -39,7 +41,7 @@ fn read_file(path: &str) -> Vec<u8> {
 fn blender_default() {
     let scene = ufbx::load_file("tests/data/blender_default.fbx", ufbx::LoadOpts::default())
         .expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
 }
 
 #[test]
@@ -47,7 +49,7 @@ fn blender_default_memory() {
     let data = read_file("tests/data/blender_default.fbx");
     let scene = ufbx::load_memory(&data, ufbx::LoadOpts::default())
         .expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
 }
 
 #[test]
@@ -56,7 +58,21 @@ fn blender_default_file() {
     let file = File::open(path).expect("could not find file");
     let scene = ufbx::load_stream(ufbx::Stream::Read(Box::new(file)), ufbx::LoadOpts::default())
         .expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
+}
+
+#[test]
+fn blender_default_file_skip() {
+    let path = "tests/data/blender_default.fbx";
+    let file = File::open(path).expect("could not find file");
+    let opts = ufbx::LoadOpts {
+        ignore_geometry: true,
+        read_buffer_size: 32,
+        ..Default::default()
+    };
+    let scene = ufbx::load_stream(ufbx::Stream::Read(Box::new(file)), opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, true);
 }
 
 #[test]
@@ -66,7 +82,7 @@ fn blender_default_reader() {
     let reader = BufReader::new(file);
     let scene = ufbx::load_stream(ufbx::Stream::Read(Box::new(reader)), ufbx::LoadOpts::default())
         .expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
 }
 
 struct ByteReader<R: Read>(R);
@@ -84,7 +100,51 @@ fn blender_default_custom_stream() {
     let reader = ByteReader(BufReader::new(file));
     let scene = ufbx::load_stream(ufbx::Stream::Box(Box::new(reader)), ufbx::LoadOpts::default())
         .expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
+}
+
+struct SkipReader<R: Read> {
+    pub reader: R,
+    pub skip_calls: usize,
+    pub require_skip_calls: usize,
+}
+
+impl<R: Read> ufbx::StreamInterface for SkipReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
+        self.reader.read(&mut buf[0..1]).ok()
+    }
+    fn skip(&mut self, bytes: usize) -> bool {
+        let mut byte = [0u8];
+        self.skip_calls += 1;
+        for _ in 0..bytes {
+            self.reader.read(&mut byte).expect("expected to skip byte");
+        }
+        true
+    }
+    fn close(&mut self) {
+        assert!(self.skip_calls >= self.require_skip_calls,
+            "expected at least {} skip calls, got {}",
+            self.require_skip_calls, self.skip_calls);
+    }
+}
+
+#[test]
+fn blender_default_custom_stream_skip() {
+    let path = "tests/data/blender_default.fbx";
+    let file = File::open(path).expect("could not find file");
+    let reader = SkipReader{
+        reader: BufReader::new(file),
+        skip_calls: 0,
+        require_skip_calls: 4,
+    };
+    let opts = ufbx::LoadOpts {
+        ignore_geometry: true,
+        read_buffer_size: 16,
+        ..Default::default()
+    };
+    let scene = ufbx::load_stream(ufbx::Stream::Box(Box::new(reader)), opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, true);
 }
 
 #[test]
@@ -100,7 +160,7 @@ fn blender_default_reader_prefix() {
     let stream = ufbx::Stream::Read(Box::new(reader));
     let scene = ufbx::load_stream_prefix(stream, &prefix, ufbx::LoadOpts::default())
         .expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
 }
 
 #[test]
@@ -115,7 +175,7 @@ fn blender_default_stdio() {
         result
     };
     let scene = result.expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
 }
 
 #[test]
@@ -135,7 +195,7 @@ fn blender_default_stdio_prefix() {
         result
     };
     let scene = result.expect("expected to load scene");
-    check_blender_default(&scene);
+    check_blender_default(&scene, false);
 }
 
 #[test]
