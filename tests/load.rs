@@ -1,5 +1,7 @@
 use std::{fs::File, io::{BufReader, Read}};
+use std::ffi::{CString, c_void};
 use ufbx;
+use libc;
 
 fn check_blender_default(scene: &ufbx::Scene) {
     {
@@ -64,6 +66,57 @@ fn blender_default_reader() {
     let reader = BufReader::new(file);
     let scene = ufbx::load_stream(ufbx::Stream::Read(Box::new(reader)), ufbx::LoadOpts::default())
         .expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
+#[test]
+fn blender_default_reader_prefix() {
+    let path = "tests/data/blender_default.fbx";
+    let file = File::open(path).expect("could not find file");
+    let mut reader = BufReader::new(file);
+
+    let mut prefix = [0u8; 64];
+    let num_read = reader.read(&mut prefix).expect("failed to read prefix");
+    assert_eq!(num_read, prefix.len());
+
+    let stream = ufbx::Stream::Read(Box::new(reader));
+    let scene = ufbx::load_stream_prefix(stream, &prefix, ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
+#[test]
+fn blender_default_stdio() {
+    let path = "tests/data/blender_default.fbx";
+    let result = unsafe {
+        let c_path = CString::new(path).unwrap();
+        let c_mode = CString::new("rb").unwrap();
+        let file = libc::fopen(c_path.as_ptr(), c_mode.as_ptr());
+        let result = ufbx::load_stdio(file as *mut c_void, ufbx::LoadOpts::default());
+        libc::fclose(file);
+        result
+    };
+    let scene = result.expect("expected to load scene");
+    check_blender_default(&scene);
+}
+
+#[test]
+fn blender_default_stdio_prefix() {
+    let path = "tests/data/blender_default.fbx";
+    let result = unsafe {
+        let c_path = CString::new(path).unwrap();
+        let c_mode = CString::new("rb").unwrap();
+        let file = libc::fopen(c_path.as_ptr(), c_mode.as_ptr());
+        
+        let mut prefix = [0u8; 32];
+        let num_read = libc::fread(prefix.as_mut_ptr() as *mut c_void, 1, prefix.len(), file);
+        assert_eq!(num_read, prefix.len());
+        
+        let result = ufbx::load_stdio_prefix(file as *mut c_void, &prefix, ufbx::LoadOpts::default());
+        libc::fclose(file);
+        result
+    };
+    let scene = result.expect("expected to load scene");
     check_blender_default(&scene);
 }
 
