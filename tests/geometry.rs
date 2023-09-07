@@ -1,6 +1,7 @@
 use std::panic;
 use panic_message::panic_message;
 use ufbx::{self, VertexStream, AllocatorOpts};
+mod common;
 
 #[test]
 fn triangulate() {
@@ -134,4 +135,30 @@ fn generate_indices_truncated() {
 
     assert_eq!(err.type_, ufbx::ErrorType::TruncatedVertexStream);
     assert_eq!(err.info(), "1");
+}
+
+#[test]
+fn tessellate_saddle() {
+    let scene = ufbx::load_file("tests/data/nurbs_saddle.fbx", ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+
+    let node = scene.find_node("nurbsPlane1").expect("expected to find nurbsPlane1");
+    let nurbs_plane = node.attrib.as_ref().and_then(|e| ufbx::as_nurbs_surface(e))
+        .expect("expected nurbsPlane1 to have NurbsSurface");
+
+    let tessellate_opts = ufbx::TessellateSurfaceOpts {
+        span_subdivision_u: 4,
+        span_subdivision_v: 4,
+        ..Default::default()
+    };
+    let mesh = nurbs_plane.tessellate(tessellate_opts)
+        .expect("expected to tessellate");
+
+    let obj_scene = ufbx::load_file("tests/data/nurbs_saddle.obj", ufbx::LoadOpts::default())
+        .expect("expected to load obj scene reference");
+    let obj_node = obj_scene.find_node("nurbsToPoly1").expect("expected to find 'nurbsToPoly1'");
+    let obj_mesh = obj_node.mesh.as_ref().expect("expected OBJ node to have mesh");
+
+    assert_eq!(mesh.num_faces, obj_mesh.num_faces);
+    common::check_mesh_positions(node, &mesh, &obj_mesh);
 }
