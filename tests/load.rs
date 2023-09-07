@@ -53,6 +53,92 @@ fn blender_default_memory() {
 }
 
 #[test]
+fn blender_default_progress() {
+    let mut progress_calls = 0;
+    let mut progress_cb = |_: &ufbx::Progress| {
+        progress_calls += 1;
+        ufbx::ProgressResult::Continue
+    };
+
+    let opts = ufbx::LoadOpts {
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .expect("expected to load scene");
+
+    assert!(progress_calls >= 64);
+    check_blender_default(&scene, false);
+}
+
+#[test]
+fn blender_default_memory_progress() {
+    let mut progress_calls = 0;
+    let mut progress_cb = |_: &ufbx::Progress| {
+        progress_calls += 1;
+        ufbx::ProgressResult::Continue
+    };
+
+    let opts = ufbx::LoadOpts {
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let data = read_file("tests/data/blender_default.fbx");
+    let scene = ufbx::load_memory(&data, opts)
+        .expect("expected to load scene");
+
+    assert!(progress_calls >= 64);
+    check_blender_default(&scene, false);
+}
+
+#[test]
+fn blender_default_cancel() {
+    let mut progress_calls = 0;
+    let mut progress_cb = |_: &ufbx::Progress| {
+        progress_calls += 1;
+        if progress_calls >= 32 {
+            return ufbx::ProgressResult::Cancel
+        }
+        ufbx::ProgressResult::Continue
+    };
+
+    let opts = ufbx::LoadOpts {
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let err = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .err().expect("expected to cancel");
+
+    assert_eq!(err.type_, ufbx::ErrorType::Cancelled);
+}
+
+#[test]
+fn blender_default_memory_cancel() {
+    let mut progress_calls = 0;
+    let mut progress_cb = |_: &ufbx::Progress| {
+        progress_calls += 1;
+        if progress_calls >= 32 {
+            return ufbx::ProgressResult::Cancel
+        }
+        ufbx::ProgressResult::Continue
+    };
+
+    let opts = ufbx::LoadOpts {
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let data = read_file("tests/data/blender_default.fbx");
+    let err = ufbx::load_memory(&data, opts)
+        .err().expect("expected to cancel");
+
+    assert_eq!(err.type_, ufbx::ErrorType::Cancelled);
+}
+
+#[test]
 fn blender_default_file() {
     let path = "tests/data/blender_default.fbx";
     let file = File::open(path).expect("could not find file");
