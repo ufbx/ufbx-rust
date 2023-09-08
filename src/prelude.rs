@@ -237,6 +237,12 @@ impl<'a> PartialEq<&'a str> for String {
     }
 }
 
+impl Debug for String {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.as_ref())
+    }
+}
+
 #[repr(C)]
 pub struct Blob {
     data: *const u8,

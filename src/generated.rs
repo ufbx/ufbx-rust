@@ -1677,7 +1677,7 @@ pub struct AnimLayer {
 pub struct AnimValue {
     pub element: Element,
     pub default_value: Vec3,
-    pub curves: [Ref<AnimCurve>; 3],
+    pub curves: [Option<Ref<AnimCurve>>; 3],
 }
 
 #[repr(u32)]

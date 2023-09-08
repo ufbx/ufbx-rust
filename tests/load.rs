@@ -139,6 +139,60 @@ fn blender_default_memory_cancel() {
 }
 
 #[test]
+fn allocator_libc() {
+    let opts = ufbx::LoadOpts {
+        temp_allocator: ufbx::AllocatorOpts {
+            allocator: ufbx::Allocator::Libc,
+            ..Default::default()
+        },
+        result_allocator: ufbx::AllocatorOpts {
+            allocator: ufbx::Allocator::Libc,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, false);
+}
+
+#[test]
+fn allocator_global() {
+    let opts = ufbx::LoadOpts {
+        temp_allocator: ufbx::AllocatorOpts {
+            allocator: ufbx::Allocator::Global,
+            ..Default::default()
+        },
+        result_allocator: ufbx::AllocatorOpts {
+            allocator: ufbx::Allocator::Global,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, false);
+}
+
+#[test]
+fn allocator_system() {
+    let opts = ufbx::LoadOpts {
+        temp_allocator: ufbx::AllocatorOpts {
+            allocator: ufbx::Allocator::System,
+            ..Default::default()
+        },
+        result_allocator: ufbx::AllocatorOpts {
+            allocator: ufbx::Allocator::System,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, false);
+}
+
+#[test]
 fn blender_default_file() {
     let path = "tests/data/blender_default.fbx";
     let file = File::open(path).expect("could not find file");
@@ -309,4 +363,30 @@ fn load_dom() {
     let version_value = version.values.get(0)
         .expect("expected FBXVersion to have a value");
     assert_eq!(version_value.value_int, 7400);
+}
+
+#[test]
+fn global_settings_props() {
+    let opts = ufbx::LoadOpts {
+        retain_dom: true,
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/cube_anim.fbx", opts)
+        .expect("expected to load scene");
+
+    let settings = &scene.settings;
+
+    let default_camera = settings.props.find_prop("DefaultCamera")
+        .expect("expected to find DefaultCamera");
+    assert!(default_camera.type_ == ufbx::PropType::String);
+    assert!(default_camera.flags.has_all(ufbx::PropFlags::VALUE_STR));
+    assert_eq!(default_camera.value_str, "Producer Perspective");
+
+    let ambient_color = settings.props.find_prop("AmbientColor")
+        .expect("expected to find AmbientColor");
+    assert!(ambient_color.type_ == ufbx::PropType::Color);
+    assert!(ambient_color.flags.has_all(ufbx::PropFlags::VALUE_VEC3));
+    assert_eq!(ambient_color.value_vec4.x, 0.0);
+    assert_eq!(ambient_color.value_vec4.y, 0.0);
+    assert_eq!(ambient_color.value_vec4.z, 0.0);
 }

@@ -113,3 +113,30 @@ fn cube_anim_evaluate() {
         assert_close(ref_color.2, diffuse_color.value_vec4.z);
     }
 }
+
+#[test]
+fn cube_anim_visibility_curve() {
+    let scene = ufbx::load_file("tests/data/cube_anim.fbx", Default::default())
+        .expect("expected to load scene");
+
+    let cube = scene.find_node("pCube1").expect("expected to find a cube");
+
+    let stack = scene.find_anim_stack("Take 001")
+        .expect("expected to find anim stack 'Take 001'");
+    assert_eq!(stack.layers.len(), 1);
+    let layer = &stack.layers[0];
+
+    let anim_props = layer.find_anim_props(&cube.element);
+    assert_eq!(anim_props.len(), 4);
+
+    let visibility = layer.find_anim_prop(&cube.element, "Visibility")
+        .expect("expected to find anim prop Visibility");
+    let curve = visibility.anim_value.curves[0].as_ref()
+        .expect("expected Visibility curve 0 to be defined");
+    assert!(visibility.anim_value.curves[1].is_none());
+    assert!(visibility.anim_value.curves[2].is_none());
+
+    assert_eq!(curve.keyframes.len(), 2);
+    assert_eq!(curve.keyframes[0].time, 0.0);
+    assert_eq!(curve.keyframes[1].time, 12.0/24.0);
+}
