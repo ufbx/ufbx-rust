@@ -320,36 +320,6 @@ pub enum Stream {
     Raw(Unsafe<RawStream>),
 }
 
-/*
-
-pub trait StreamInterface {
-    fn read(&mut self, buf: &mut [u8]) -> Option<usize>;
-    fn skip(&mut self, bytes: usize) -> bool {
-        #![allow(deprecated)]
-        unsafe {
-            let mut local_buf: [u8; 512] = std::mem::uninitialized();
-            let mut left = bytes;
-            while left > 0 {
-                let to_read = min(left, local_buf.len());
-                let num_read = self.read(&mut local_buf[0..to_read]).unwrap_or(0);
-                if num_read != to_read { return false }
-                left -= num_read
-            }
-            true
-        }
-    }
-    fn close(&mut self) { }
-}
-
-pub enum Stream {
-    File(File),
-    Read(Box<dyn Read>),
-    Box(Box<dyn StreamInterface>),
-    Raw(RawStream),
-}
-
-*/
-
 unsafe extern "C" fn global_alloc(_user: *mut c_void, size: usize) -> *mut c_void {
     let layout = Layout::from_size_align(size, 8).unwrap();
     alloc::alloc(layout) as *mut _
@@ -668,55 +638,6 @@ impl Arena {
         ptr
     }
 }
-
-/*
-
-impl FromRust for RawString {
-    type From = string::String;
-    fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {
-        RawString {
-            data: arena.push_copy(from.as_bytes()),
-            length: from.len(),
-        }
-    }
-}
-
-impl FromRust for RawBlob {
-    type From = Vec<u8>;
-    fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {
-        RawBlob {
-            data: arena.push_copy(from.as_slice()),
-            size: from.len(),
-        }
-    }
-}
-
-impl FromRust for u32 {
-    type From = u32;
-    fn from_rust(from: &mut Self::From, _arena: &mut Arena) -> Self { *from }
-}
-
-impl FromRust for f64 {
-    type From = f64;
-    fn from_rust(from: &mut Self::From, _arena: &mut Arena) -> Self { *from }
-}
-
-impl<T: FromRust> FromRust for RawList<T> {
-    type From = Vec<<T as FromRust>::From>;
-    fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {
-        let items = arena.push::<T>(from.len());
-        for (i,v) in from.iter_mut().enumerate() {
-            unsafe {
-                ptr::write(items.add(i), T::from_rust(v, arena));
-            }
-        }
-        RawList {
-            data: items,
-            count: from.len(),
-        }
-    }
-}
-*/
 
 pub fn format_flags(f: &mut fmt::Formatter<'_>, names: &[(&str, u32)], value: u32) -> fmt::Result {
     let mut has_any = false;
