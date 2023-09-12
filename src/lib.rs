@@ -9,6 +9,7 @@ use std::vec::Vec;
 #[cfg(feature = "mint")]
 pub mod impl_mint;
 
+/*
 pub fn open_memory(data: &[u8], opts: OpenMemoryOpts) -> Result<Stream> {
     let mut stream: RawStream = Default::default();
     let mut opts_mut = opts;
@@ -17,6 +18,7 @@ pub fn open_memory(data: &[u8], opts: OpenMemoryOpts) -> Result<Stream> {
     assert!(ok);
     Ok(Stream::Raw(unsafe { Unsafe::new(stream) }))
 }
+*/
 
 pub fn triangulate_face_vec(mut indices: &mut Vec<u32>, mesh: &Mesh, face: Face) -> u32 {
     if face.num_indices <= 3 {

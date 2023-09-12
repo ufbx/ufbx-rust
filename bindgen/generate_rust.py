@@ -10,7 +10,7 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, Unsafe, ExternalRef, InlineBuf, VertexStream, format_flags};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, format_flags};
 """.strip()
 
 post_ffi = r"""
@@ -398,6 +398,7 @@ class RustType:
     def __init__(self, irt: Optional[ir.Type], inner: Optional["RustType"]):
         self.ir = irt
         self.needs_lifetime = False
+        self.rust_needs_lifetime = False
         self.is_list = False
         self.is_ref_list = False
         self.is_result = False
@@ -476,6 +477,8 @@ class RustType:
             return f"Result<{self.inner.fmt_member(lifetime)}>"
         elif self.is_function:
             return self.fmt_raw()
+        elif self.is_synthetic and self.name == "RawList":
+            return f"RawList<{self.inner.fmt_member(lifetime)}>"
         elif self.is_list:
             list_type = "RefList" if self.is_ref_list else "List"
             lt = f"'{lifetime}, " if lifetime else ""
@@ -538,15 +541,16 @@ class RustType:
         elif self.is_function:
             return self.fmt_raw()
         elif self.is_list:
-            list_type = "RefList" if self.is_ref_list else "List"
-            lt = f"'{lifetime}, " if lifetime else ""
-            return f"{list_type}<{self.inner.fmt_input(lifetime)}>"
+            return f"Vec<{self.inner.fmt_input(lifetime)}>"
         elif self.is_synthetic and self.name == "RawString":
-            lt = f"'{lifetime} " if lifetime else ""
-            return f"Option<&{lt}str>"
+            assert lifetime
+            return f"StringOpt<'{lifetime}>"
         elif self.is_synthetic and self.name == "RawBlob":
-            lt = f"'{lifetime} " if lifetime else ""
-            return f"Option<&{lt}[u8]>"
+            assert lifetime
+            return f"BlobOpt<'{lifetime}>"
+        elif self.is_synthetic and self.name == "RawList":
+            assert lifetime
+            return f"ListOpt<'{lifetime}, {self.inner.fmt_input(lifetime)}>"
         elif self.kind == "array":
             num = self.ir.array_length
             return f"[{self.inner.fmt_input(lifetime)}; {num}]"
@@ -563,7 +567,8 @@ class RustType:
         elif self.kind == "struct":
             rs = structs[self.ir.key]
             if rs.ir.is_input or rs.ir.is_interface:
-                return rs.rust_name
+                lt = f"'{lifetime}" if lifetime and self.rust_needs_lifetime else ""
+                return f"{rs.rust_name}<{lt}>"
             elif rs.ir.is_callback:
                 assert lifetime
                 lt = f"'{lifetime}"
@@ -679,15 +684,20 @@ def init_type(typ: ir.Type) -> RustType:
     if typ.key not in types:
         inner = None
         inner_lifetime = False
+        rust_inner_lifetime = False
         if typ.inner:
             inner = init_type(file.types[typ.inner])
             if inner.needs_lifetime:
                 inner_lifetime = True
+            if inner.rust_needs_lifetime:
+                rust_inner_lifetime = True
         rt = RustType(typ, inner)
         types[typ.key] = rt
 
         if inner_lifetime:
             rt.needs_lifetime = True
+        if rust_inner_lifetime:
+            rt.rust_needs_lifetime = True
         if typ.key in lifetime_types:
             rt.needs_lifetime = True
 
@@ -699,12 +709,18 @@ def propagate_lifetimes():
         updated = False
         for rt in types.values():
             if rt.kind != "struct": continue
-            if rt.needs_lifetime: continue
-            rs = structs[rt.ir.key]
-            for field in rs.fields:
-                if field.type.needs_lifetime:
-                    rt.needs_lifetime = True
-                    updated = True
+            if not rt.needs_lifetime:
+                rs = structs[rt.ir.key]
+                for field in rs.fields:
+                    if field.type.needs_lifetime:
+                        rt.needs_lifetime = True
+                        updated = True
+            if not rt.rust_needs_lifetime:
+                rs = structs[rt.ir.key]
+                for field in rs.fields:
+                    if field.type.rust_needs_lifetime:
+                        rt.rust_needs_lifetime = True
+                        updated = True
 
 def init_fields(rs: RustStruct, field: ir.Field):
     if field.name == "":
@@ -733,10 +749,17 @@ def init_fields(rs: RustStruct, field: ir.Field):
         rt = RustType(None, None)
         rt.name = "RawString"
         rt.is_synthetic = True
+        rt.rust_needs_lifetime = True
     elif rs.ir.is_input and rt.ir.key == "ufbx_blob":
         rt = RustType(None, None)
         rt.name = "RawBlob"
         rt.is_synthetic = True
+        rt.rust_needs_lifetime = True
+    elif rs.ir.is_input and rt.ir.kind == "struct" and file.structs[rt.ir.key].is_list:
+        rt = RustType(None, rt.inner)
+        rt.name = "RawList"
+        rt.is_synthetic = True
+        rt.rust_needs_lifetime = True
     elif field.kind == "inlineBuf":
         rt = RustType(None, rt)
         rt.name = f"InlineBuf<[{rt.inner.inner.name}; {rt.inner.ir.array_length}]>"
@@ -850,7 +873,7 @@ def emit_struct(rs: RustStruct):
 
     emit()
     emit(f"#[repr(C)]")
-    if rs.ir.is_pod or rs.ir.is_callback or rs.ir.is_input or rs.ir.is_interface:
+    if rs.ir.is_pod:
         emit(f"#[derive(Clone, Copy)]")
     if rs.ir.name in default_derive_types or rs.ir.is_pod or rs.ir.is_input:
         emit(f"#[derive(Default)]")
@@ -932,60 +955,143 @@ def emit_struct(rs: RustStruct):
 def emit_input_callback(rs: RustStruct):
     sig = callback_signatures[rs.ir.name]
 
-    emit()
-    emit(f"pub enum {rs.rust_name}<'a> {{")
-    indent()
-    emit("None,")
-    emit(f"Mut(&'a mut dyn FnMut{sig}),")
-    emit(f"Ref(&'a dyn Fn{sig}),")
-    emit(f"Raw(Unsafe<{rs.name}>),")
-    unindent()
-    emit("}")
+    if False:
+        emit()
+        emit(f"type {rs.rust_name} = Box<dyn FnMut{sig}>;")
 
-    emit()
-    emit(f"impl<'a> Default for {rs.rust_name}<'a> {{")
-    indent()
-    emit("fn default() -> Self { Self::None }")
-    unindent()
-    emit("}")
+    if False:
+        emit(f"impl FromRust for {rs.name} {{")
+        indent()
 
-    emit()
-    emit(f"impl {rs.name} {{")
-    indent()
+        emit(f"type From = Option<{rs.rust_name}>;")
+        emit(f"fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {{")
+        indent()
+        emit("match from {")
+        indent()
+        emit(f"Some(_) => {{")
+        indent()
+        emit(f"let ptr = arena.push_own(mem::take(from).unwrap());")
+        emit(f"{rs.name} {{")
+        indent()
+        emit(f"fn_: Some(call_{rs.ir.short_name}),")
+        emit("user: ptr as *mut c_void,")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+        emit(f"None => {rs.name}::default(),")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
 
-    emit(f"fn from_func<F: FnMut{sig}>(arg: &mut F) -> Self {{")
-    indent()
-    emit(f"{rs.name} {{")
-    indent()
-    emit(f"fn_: Some(call_{rs.ir.short_name}::<F>),")
-    emit(f"user: arg as *mut F as *mut c_void,")
-    unindent()
-    emit("}")
-    unindent()
-    emit("}")
+        unindent()
+        emit("}")
 
-    emit()
-    emit(f"fn from_rust(arg: &mut {rs.rust_name}) -> Self {{")
-    indent()
-    emit("match arg {")
-    indent()
-    emit(f"{rs.rust_name}::None => Default::default(),")
-    emit(f"{rs.rust_name}::Ref(f) => Self::from_func(f),")
-    emit(f"{rs.rust_name}::Mut(f) => Self::from_func(f),")
-    emit(f"{rs.rust_name}::Raw(raw) => raw.take(),")
-    unindent()
-    emit("}")
-    unindent()
-    emit("}")
-    unindent()
-    emit("}")
+    if False:
+        emit()
+        emit(f"impl {rs.name} {{")
+        indent()
+
+        emit(f"fn from_func<F: FnMut{sig}>(arg: &mut F) -> Self {{")
+        indent()
+        emit(f"{rs.name} {{")
+        indent()
+        emit(f"fn_: Some(call_{rs.ir.short_name}::<F>),")
+        emit(f"user: arg as *mut F as *mut c_void,")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+
+        emit()
+        emit(f"fn from_rust(arg: &mut Option<{rs.rust_name}>) -> Self {{")
+        indent()
+        emit("match arg {")
+        indent()
+        emit(f"Some(f) => Self::from_func(f),")
+        emit(f"None => Self::default(),")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+
+    if True:
+        emit()
+        emit(f"pub enum {rs.rust_name}<'a> {{")
+        indent()
+        emit("Unset,")
+        emit(f"Mut(&'a mut dyn FnMut{sig}),")
+        emit(f"Ref(&'a dyn Fn{sig}),")
+        emit(f"Raw(Unsafe<{rs.name}>),")
+        unindent()
+        emit("}")
+
+        emit()
+        emit(f"impl<'a> Default for {rs.rust_name}<'a> {{")
+        indent()
+        emit("fn default() -> Self { Self::Unset }")
+        unindent()
+        emit("}")
+
+        emit()
+        emit(f"impl {rs.name} {{")
+        indent()
+
+        emit(f"fn from_func<F: FnMut{sig}>(arg: &mut F) -> Self {{")
+        indent()
+        emit(f"{rs.name} {{")
+        indent()
+        emit(f"fn_: Some(call_{rs.ir.short_name}::<F>),")
+        emit(f"user: arg as *mut F as *mut c_void,")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+
+        unindent()
+        emit("}")
+
+        emit()
+        emit(f"impl {rs.rust_name}<'_> {{")
+        indent()
+
+        emit()
+        emit(f"fn from_rust(&self) -> {rs.name} {{")
+        indent()
+        emit("match self {")
+        indent()
+        emit(f"{rs.rust_name}::Unset => Default::default(),")
+        emit(f"_ => panic!(\"required mutable\"),")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+
+        emit()
+        emit(f"fn from_rust_mut(&mut self) -> {rs.name} {{")
+        indent()
+        emit("match self {")
+        indent()
+        emit(f"{rs.rust_name}::Unset => Default::default(),")
+        emit(f"{rs.rust_name}::Ref(f) => {rs.name}::from_func(f),")
+        emit(f"{rs.rust_name}::Mut(f) => {rs.name}::from_func(f),")
+        emit(f"{rs.rust_name}::Raw(raw) => raw.take(),")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+
+        unindent()
+        emit("}")
 
 def emit_input_struct(rs: RustStruct):
     if rs.ir.is_callback:
         emit_input_callback(rs)
     if not rs.ir.is_input: return
 
-    lifetime = ""
     typ = types[rs.ir.name]
     needs_lifetime = typ.needs_lifetime
 
@@ -993,59 +1099,82 @@ def emit_input_struct(rs: RustStruct):
         if field.ir.private: continue
         if field.type.kind == "struct":
             frs = structs[field.type.ir.key]
-            if frs.ir.is_callback or frs.ir.name in ("ufbx_string", "ufbx_blob"):
+            if frs.ir.is_callback or frs.ir.name in ("ufbx_string", "ufbx_blob") or frs.ir.is_list:
                 needs_lifetime = True
+        elif field.type.rust_needs_lifetime:
+            needs_lifetime = True
 
+    lifetime = ""
+    lifetime_a = ""
+    lt_a = ""
+    typ = types[rs.ir.name]
     if needs_lifetime:
-        lifetime = "<'a>"
+        lifetime = "a"
+        lifetime_a = "<'a>"
+        lt_a = "'a "
 
     emit()
     emit(f"#[derive(Default)]")
-    emit(f"pub struct {rs.rust_name}{lifetime} {{")
+    emit(f"pub struct {rs.rust_name}{lifetime_a} {{")
     indent()
 
     for field in rs.fields:
         if field.ir.private: continue
         prefix = "pub "
-        lifetime = "a"
         emit(f"{prefix}{field.name}: {field.type.fmt_input(lifetime)},")
 
     unindent()
     emit("}")
 
     emit()
-    emit(f"impl {rs.name} {{")
+    emit(f"impl{lifetime_a} FromRust for {rs.rust_name}{lifetime_a} {{")
     indent()
 
-    emit(f"pub fn from_rust(arg: &mut {rs.rust_name}) -> Self {{")
-    indent()
-    emit(f"{rs.name} {{")
-    indent()
+    emit(f"type Result = {rs.name};")
 
-    for field in rs.fields:
-        if field.ir.private:
-            emit(f"{field.name}: 0,")
-            continue
+    for mut in ("", "mut "):
+        mut_us = "_mut" if mut  else ""
+        emit(f"#[allow(unused, unused_variables, dead_code)]")
+        emit(f"fn from_rust{mut_us}(&{mut}self, arena: &mut Arena) -> Self::Result {{")
+        indent()
+        emit(f"{rs.name} {{")
+        indent()
 
-        has_from = False
-        if field.type.kind == "struct":
-            frs = structs[field.type.ir.key]
-            if frs.ir.is_callback or frs.ir.is_input or frs.ir.is_interface:
+        for field in rs.fields:
+            if field.ir.private:
+                emit(f"{field.name}: 0,")
+                continue
+
+            has_from = False
+            has_arena = False
+            if field.type.kind == "struct":
+                frs = structs[field.type.ir.key]
+                if frs.ir.is_callback or frs.ir.is_input or frs.ir.is_interface or frs.ir.is_list:
+                    has_from = True
+                    if frs.ir.is_input or frs.ir.is_list:
+                        has_arena = True
+            elif field.type.name in ("RawString", "RawBlob", "RawList"):
                 has_from = True
-        elif field.type.name in ("RawString", "RawBlob"):
-            has_from = True
+                has_arena = True
 
-        if has_from:
-            emit(f"{field.name}: {field.type.name}::from_rust(&mut arg.{field.name}),")
-        elif field.type.kind == "unsafe":
-            emit(f"{field.name}: arg.{field.name}.take(),")
-        else:
-            emit(f"{field.name}: arg.{field.name},")
+            if has_from:
+                if has_arena:
+                    emit(f"{field.name}: self.{field.name}.from_rust{mut_us}(arena),")
+                else:
+                    emit(f"{field.name}: self.{field.name}.from_rust{mut_us}(),")
+            elif field.type.kind == "unsafe":
+                if mut:
+                    emit(f"{field.name}: self.{field.name}.take(),")
+                else:
+                    emit(f"{field.name}: panic!(\"required mutable\"),")
+            else:
+                emit(f"{field.name}: self.{field.name},")
 
-    unindent()
-    emit("}")
-    unindent()
-    emit("}")
+        unindent()
+        emit("}")
+        unindent()
+        emit("}")
+
     unindent()
     emit("}")
 
@@ -1270,11 +1399,33 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
     unsafe = "" if is_unsafe else "unsafe "
 
     if non_raw:
+        has_arena = False
         for arg in rf.args:
             if arg.is_raw:
+                use_arena = True
+                use_mut = True
                 leaf = arg.type.get_leaf()
-                emit(f"let mut {arg.name}_mut = {arg.name};")
-                emit(f"let {arg.name}_raw = {leaf.name}::from_rust(&mut {arg.name}_mut);")
+                if leaf and leaf.ir and leaf.ir.kind == "struct":
+                    rs = file.structs[leaf.ir.key]
+                    if rs.is_interface:
+                        use_arena = False
+                if arg.kind == "slice":
+                    use_mut = False
+                if use_arena:
+                    if not has_arena:
+                        has_arena = True
+                        emit(f"let mut arena = Arena::new();")
+                    if use_mut:
+                        emit(f"let mut {arg.name}_mut = {arg.name};")
+                        emit(f"let {arg.name}_raw = {arg.name}_mut.from_rust_mut(&mut arena);")
+                    else:
+                        emit(f"let {arg.name}_raw = {arg.name}.from_rust_mut(&mut arena);")
+                else:
+                    if use_mut:
+                        emit(f"let mut {arg.name}_mut = {arg.name};")
+                        emit(f"let {arg.name}_raw = {arg.name}_mut.from_rust_mut();")
+                    else:
+                        emit(f"let {arg.name}_raw = {arg.name}.from_rust_mut();")
         params = []
         for arg in rf.args:
             if arg.is_raw:

@@ -5,6 +5,13 @@ fn assert_close(a: f64, b: f64) {
     assert!(delta.abs() <= 0.001, "expected approximately {}={}", a, b);
 }
 
+fn assert_close_vec4(a: ufbx::Vec4, b: ufbx::Vec4) {
+    assert_close(a.x, b.x);
+    assert_close(a.y, b.y);
+    assert_close(a.z, b.z);
+    assert_close(a.w, b.w);
+}
+
 #[test]
 fn cube_anim() {
     let scene = ufbx::load_file("tests/data/cube_anim.fbx", Default::default())
@@ -139,4 +146,92 @@ fn cube_anim_visibility_curve() {
     assert_eq!(curve.keyframes.len(), 2);
     assert_eq!(curve.keyframes[0].time, 0.0);
     assert_eq!(curve.keyframes[1].time, 12.0/24.0);
+}
+
+#[test]
+fn anim_override() {
+    let scene = ufbx::load_file("tests/data/cube_anim.fbx", Default::default())
+        .expect("expected to load scene");
+
+    let cube = scene
+        .find_node("pCube1")
+        .expect("expected to find pCube1");
+    let material = scene.
+        find_element(ufbx::ElementType::Material, "lambert1")
+        .and_then(ufbx::as_material)
+        .expect("expected to find material lambert1");
+
+    let uv_prop = cube.element.props.find_prop("currentUVSet")
+        .expect("expected to find currentUVSet in pCube1");
+    assert_eq!(uv_prop.value_str, "map1");
+
+    let new_prop = cube.element.props.find_prop("NewProperty");
+    assert!(new_prop.is_none());
+
+    let diffuse_prop = material.element.props.find_prop("DiffuseColor")
+        .expect("expected to find DiffuseColor in lambert1");
+    assert_close_vec4(diffuse_prop.value_vec4, ufbx::Vec4{
+        x: 0.740740716457367,
+        y: 0.259259253740311,
+        z: 0.0,
+        w: 0.0,
+    });
+
+    let overrides = [
+        ufbx::PropOverrideDesc {
+            element_id: cube.element.element_id,
+            prop_name: "currentUVSet".into(),
+            value_str: format!("map{}", 99).into(),
+            ..Default::default()
+        },
+        ufbx::PropOverrideDesc {
+            element_id: cube.element.element_id,
+            prop_name: "NewProperty".into(),
+            value_int: 0x4000_0000_0000_0001_i64,
+            ..Default::default()
+        },
+        ufbx::PropOverrideDesc {
+            element_id: material.element.element_id,
+            prop_name: "DiffuseColor".into(),
+            value: ufbx::Vec4{ x: 1.0, y: 0.0, z: 1.0, w: 1.0 },
+            ..Default::default()
+        },
+    ];
+
+    let anim_opts = ufbx::AnimOpts {
+        overrides: ufbx::ListOpt::Ref(&overrides),
+        ..Default::default()
+    };
+    let anim = ufbx::create_anim(&scene, anim_opts)
+        .expect("expected to create anim");
+
+    let state = scene.evaluate(&anim, 0.0, Default::default())
+        .expect("expected to evaluate scene");
+
+    let cube_state = state.elements
+        .get(cube.element.element_id as usize)
+        .and_then(|e| ufbx::as_node(e))
+        .expect("expected to find pCube1 in evaluated scene");
+    let material_state = state.elements
+        .get(material.element.element_id as usize)
+        .and_then(|e| ufbx::as_material(e))
+        .expect("expected to find lambert1 in evaluated scene");
+
+    let uv_prop = cube_state.element.props.find_prop("currentUVSet")
+        .expect("expected to find currentUVSet in evaluated pCube1");
+    assert_eq!(uv_prop.value_str, "map99");
+
+    let new_prop = cube_state.element.props.find_prop("NewProperty")
+        .expect("expected to find NewProperty in evaluated pCube1");
+    assert_eq!(new_prop.value_int, 0x4000_0000_0000_0001_i64);
+    assert_close(new_prop.value_vec4.x, 0x4000_0000_0000_0001_i64 as f64);
+
+    let diffuse_prop = material_state.element.props.find_prop("DiffuseColor")
+        .expect("expected to find DiffuseColor in evaluated lambert1");
+    assert_close_vec4(diffuse_prop.value_vec4, ufbx::Vec4{
+        x: 1.0,
+        y: 0.0,
+        z: 1.0,
+        w: 1.0,
+    });
 }

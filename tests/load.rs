@@ -61,6 +61,7 @@ fn blender_default_progress() {
     };
 
     let opts = ufbx::LoadOpts {
+        filename: "test".into(),
         progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
         progress_interval_hint: 256,
         ..Default::default()

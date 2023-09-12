@@ -1,12 +1,14 @@
+use std::any::Any;
 use std::{ptr, str, slice};
 use std::marker::PhantomData;
 use std::ops::{Deref, Index};
 use std::alloc::{self,Layout,System,GlobalAlloc};
-use std::ffi::{c_void};
+use std::ffi::c_void;
 use std::cmp::min;
 use std::io::{Read,Seek,SeekFrom};
 use std::fs::File;
 use std::mem;
+use std::string;
 use std::ptr::NonNull;
 use std::fmt::{self, Debug, Display, Formatter};
 use crate::OpenFileInfo;
@@ -129,10 +131,18 @@ impl<T> Deref for Ref<T> {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct RawString {
     pub data: *const u8,
     pub length: usize,
+}
+
+impl RawString {
+    fn new(s: &[u8]) -> Self {
+        RawString {
+            data: s.as_ptr(),
+            length: s.len(),
+        }
+    }
 }
 
 impl Default for RawString {
@@ -144,36 +154,41 @@ impl Default for RawString {
     }
 }
 
-impl RawString {
-    pub fn from_rust(s: &mut Option<&str>) -> RawString {
-        match s {
-            Some(s) => RawString { data: s.as_ptr(), length: s.len() },
-            None => Default::default(),
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct RawBlob {
     pub data: *const u8,
-    pub length: usize,
+    pub size: usize,
+}
+
+impl RawBlob {
+    fn new(s: &[u8]) -> Self {
+        RawBlob {
+            data: s.as_ptr(),
+            size: s.len(),
+        }
+    }
 }
 
 impl Default for RawBlob {
     fn default() -> Self {
         RawBlob {
             data: ptr::null(),
-            length: 0,
+            size: 0,
         }
     }
 }
 
-impl RawBlob {
-    pub fn from_rust(s: &mut Option<&[u8]>) -> RawBlob {
-        match s {
-            Some(s) => RawBlob { data: s.as_ptr(), length: s.len() },
-            None => Default::default(),
+#[repr(C)]
+pub struct RawList<T> {
+    pub data: *const T,
+    pub count: usize,
+}
+
+impl<T> Default for RawList<T> {
+    fn default() -> Self {
+        RawList {
+            data: ptr::null(),
+            count: 0,
         }
     }
 }
@@ -401,9 +416,9 @@ impl Default for Allocator {
     fn default() -> Self { Allocator::Global }
 }
 
-impl RawAllocator {
-    pub fn from_rust(a: &mut Allocator) -> RawAllocator {
-        match a {
+impl Allocator {
+    pub(crate) fn from_rust(&self) -> RawAllocator {
+        match self {
         Allocator::Libc => RawAllocator {
             alloc_fn: None,
             realloc_fn: None,
@@ -425,6 +440,11 @@ impl RawAllocator {
             free_allocator_fn: None,
             user: ptr::null::<c_void>() as *mut c_void,
         },
+        _ => panic!("required mutable reference"),
+        }
+    }
+    pub(crate) fn from_rust_mut(&mut self) -> RawAllocator {
+        match self {
         Allocator::Box(b) => RawAllocator {
             alloc_fn: Some(allocator_imp_alloc),
             realloc_fn: Some(allocator_imp_realloc),
@@ -433,6 +453,7 @@ impl RawAllocator {
             user: Box::into_raw(Box::new(b)) as *mut _,
         },
         Allocator::Raw(raw) => raw.take(),
+        _ => Self::from_rust(self),
         }
     }
 }
@@ -444,7 +465,7 @@ pub struct VertexStream<'a> {
     _marker: PhantomData<&'a mut ()>,
 }
 
-impl VertexStream<'static> {
+impl VertexStream<'_> {
     pub fn new<T: Copy + Sized>(data: &mut [T]) -> VertexStream {
         return VertexStream {
             data: data.as_mut_ptr() as *mut c_void,
@@ -455,9 +476,10 @@ impl VertexStream<'static> {
     }
 }
 
-impl RawVertexStream {
-    pub fn from_rust(streams: &mut [VertexStream]) -> Vec<RawVertexStream> {
-        streams.iter().map(|s| RawVertexStream {
+impl<'a> FromRust for [VertexStream<'a>] {
+    type Result = Vec<RawVertexStream>;
+    fn from_rust_mut(&mut self, _arena: &mut Arena) -> Self::Result {
+        self.iter().map(|s| RawVertexStream {
             data: s.data,
             vertex_count: s.vertex_count,
             vertex_size: s.vertex_size,
@@ -514,13 +536,13 @@ impl<T: Read + Seek> StreamInterface for StreamReadSeek<T> {
     }
 }
 
-impl RawStream {
-    pub fn from_rust(s: &mut Stream) -> RawStream {
-        let local = mem::replace(s, Stream::Raw(unsafe { Unsafe::new(Default::default()) }));
+impl Stream {
+    pub(crate) fn from_rust_mut(&mut self) -> RawStream {
+        let local = mem::replace(self, Stream::Raw(unsafe { Unsafe::new(Default::default()) }));
         match local {
             Stream::File(file) => {
                 let mut inner = Stream::Box(Box::new(StreamReadSeek(file)));
-                RawStream::from_rust(&mut inner)
+                inner.from_rust_mut()
             },
             Stream::Read(b) => RawStream {
                 read_fn: Some(stream_read_read),
@@ -561,7 +583,7 @@ pub unsafe extern "C" fn call_open_file_cb<F>(user: *mut c_void, dst: *mut RawSt
         None => return false,
     };
 
-    *dst = RawStream::from_rust(&mut stream);
+    *dst = stream.from_rust_mut();
     true
 }
 
@@ -622,6 +644,80 @@ impl<'a, T> Deref for ExternalRef<'a, T> {
     }
 }
 
+pub(crate) struct Arena {
+    items: Vec<Box<dyn Any>>,
+}
+
+impl Arena {
+    pub fn new() -> Arena {
+        Arena{
+            items: Vec::new(),
+        }
+    }
+
+    #[allow(unused)]
+    pub fn push_box<T: 'static>(&mut self, s: Box<T>) -> *const T {
+        let ptr = Box::as_ref(&s) as *const T;
+        self.items.push(s);
+        ptr
+    }
+    pub fn push_vec<T: 'static>(&mut self, vec: Vec<T>) -> *const T {
+        if vec.len() == 0 { return ptr::null(); }
+        let ptr = vec.as_ptr();
+        self.items.push(Box::new(vec));
+        ptr
+    }
+}
+
+/*
+
+impl FromRust for RawString {
+    type From = string::String;
+    fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {
+        RawString {
+            data: arena.push_copy(from.as_bytes()),
+            length: from.len(),
+        }
+    }
+}
+
+impl FromRust for RawBlob {
+    type From = Vec<u8>;
+    fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {
+        RawBlob {
+            data: arena.push_copy(from.as_slice()),
+            size: from.len(),
+        }
+    }
+}
+
+impl FromRust for u32 {
+    type From = u32;
+    fn from_rust(from: &mut Self::From, _arena: &mut Arena) -> Self { *from }
+}
+
+impl FromRust for f64 {
+    type From = f64;
+    fn from_rust(from: &mut Self::From, _arena: &mut Arena) -> Self { *from }
+}
+
+impl<T: FromRust> FromRust for RawList<T> {
+    type From = Vec<<T as FromRust>::From>;
+    fn from_rust(from: &mut Self::From, arena: &mut Arena) -> Self {
+        let items = arena.push::<T>(from.len());
+        for (i,v) in from.iter_mut().enumerate() {
+            unsafe {
+                ptr::write(items.add(i), T::from_rust(v, arena));
+            }
+        }
+        RawList {
+            data: items,
+            count: from.len(),
+        }
+    }
+}
+*/
+
 pub fn format_flags(f: &mut fmt::Formatter<'_>, names: &[(&str, u32)], value: u32) -> fmt::Result {
     let mut has_any = false;
 
@@ -670,6 +766,145 @@ impl fmt::Display for Vec4 {
             (Some(p), false) => write!(f, "({1:.0$}, {2:.0$}, {3:.0$}, {4:.0$})", p, self.x, self.y, self.z, self.w),
             (Some(p), true) => write!(f, "({1:+.0$}, {2:+.0$}, {3:+.0$}, {4:+.0$})", p, self.x, self.y, self.z, self.w),
         }
+    }
+}
+
+pub(crate) trait FromRust {
+    type Result: 'static;
+    fn from_rust(&self, _arena: &mut Arena) -> Self::Result {
+        panic!("type must be used via mutable reference")
+    }
+    fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
+        self.from_rust(arena)
+    }
+}
+
+pub enum StringOpt<'a> {
+    Unset,
+    Ref(&'a str),
+    Owned(string::String),
+}
+
+impl Default for StringOpt<'_> {
+    fn default() -> Self {
+        StringOpt::Unset
+    }
+}
+
+impl<'a> From<&'a str> for StringOpt<'a> {
+    fn from(v: &'a str) -> Self {
+        StringOpt::Ref(v)
+    }
+}
+
+impl<'a> From<string::String> for StringOpt<'a> {
+    fn from(v: string::String) -> Self {
+        StringOpt::Owned(v)
+    }
+}
+
+impl<'a> FromRust for StringOpt<'a> {
+    type Result = RawString;
+    fn from_rust(&self, _arena: &mut Arena) -> Self::Result {
+        match self {
+        StringOpt::Unset => RawString::default(),
+        StringOpt::Ref(r) => RawString::new(r.as_bytes()),
+        StringOpt::Owned(r) => RawString::new(r.as_bytes()),
+        }
+    }
+}
+
+pub enum BlobOpt<'a> {
+    Unset,
+    Ref(&'a [u8]),
+    Owned(Vec<u8>),
+}
+
+impl Default for BlobOpt<'_> {
+    fn default() -> Self {
+        BlobOpt::Unset
+    }
+}
+
+impl<'a> From<&'a [u8]> for BlobOpt<'a> {
+    fn from(v: &'a [u8]) -> Self {
+        BlobOpt::Ref(v)
+    }
+}
+
+impl<'a> From<Vec<u8>> for BlobOpt<'a> {
+    fn from(v: Vec<u8>) -> Self {
+        BlobOpt::Owned(v)
+    }
+}
+
+impl<'a> FromRust for BlobOpt<'a> {
+    type Result = RawBlob;
+    fn from_rust(&self, _arena: &mut Arena) -> Self::Result {
+        match self {
+        BlobOpt::Unset => RawBlob::default(),
+        BlobOpt::Ref(r) => RawBlob::new(r),
+        BlobOpt::Owned(r) => RawBlob::new(r.as_slice()),
+        }
+    }
+}
+
+pub enum ListOpt<'a, T> {
+    Unset,
+    Ref(&'a [T]),
+    Mut(&'a mut [T]),
+    Owned(Vec<T>),
+}
+
+impl<T> Default for ListOpt<'_, T> {
+    fn default() -> Self {
+        ListOpt::Unset
+    }
+}
+
+impl<'a, T> From<&'a [T]> for ListOpt<'a, T> {
+    fn from(v: &'a [T]) -> Self {
+        ListOpt::Ref(v)
+    }
+}
+
+impl<'a, T> From<Vec<T>> for ListOpt<'a, T> {
+    fn from(v: Vec<T>) -> Self {
+        ListOpt::Owned(v)
+    }
+}
+
+impl<'a, T: FromRust> FromRust for ListOpt<'a, T> {
+    type Result = RawList<T::Result>;
+
+    fn from_rust(&self, arena: &mut Arena) -> Self::Result {
+        let items: Vec<T::Result> = match self {
+            ListOpt::Unset => return RawList::default(),
+            ListOpt::Ref(v) => v.iter().map(|v| T::from_rust(v, arena)).collect(),
+            ListOpt::Mut(v) => v.iter().map(|v| T::from_rust(v, arena)).collect(),
+            ListOpt::Owned(v) => v.iter().map(|v| T::from_rust(v, arena)).collect(),
+        };
+        let count = items.len();
+        RawList { data: arena.push_vec(items), count }
+    }
+
+    fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
+        let items: Vec<T::Result> = match mem::take(self) {
+            ListOpt::Unset => return RawList::default(),
+            ListOpt::Ref(v) => v.iter().map(|v| T::from_rust(v, arena)).collect(),
+            ListOpt::Mut(v) => v.into_iter().map(|v| T::from_rust_mut(v, arena)).collect(),
+            ListOpt::Owned(v) => v.into_iter().map(|mut v| T::from_rust_mut(&mut v, arena)).collect(),
+        };
+        let count = items.len();
+        RawList { data: arena.push_vec(items), count }
+    }
+
+}
+
+impl<T: Copy + 'static> FromRust for T {
+    type Result = T;
+    fn from_rust(&self, _arena: &mut Arena) -> Self::Result {
+        *self
     }
 }
 
