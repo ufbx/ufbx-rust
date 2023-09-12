@@ -749,6 +749,8 @@ input_structs = [
     "ufbx_subdivide_opts",
     "ufbx_geometry_cache_opts",
     "ufbx_geometry_cache_data_opts",
+    "ufbx_anim_opts",
+    "ufbx_prop_override_desc",
 ]
 
 interface_structs = [
