@@ -5,6 +5,8 @@ import argparse
 import os
 import json
 
+g_argv = None
+
 uses = r"""
 use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
@@ -1071,6 +1073,8 @@ def emit_input_struct(rs: RustStruct):
     for mut in ("", "mut "):
         mut_us = "_mut" if mut  else ""
         emit(f"#[allow(unused, unused_variables, dead_code)]")
+        if g_argv.nightly:
+            emit(f"#[no_coverage]")
         emit(f"fn from_rust{mut_us}(&{mut}self, arena: &mut Arena) -> Self::Result {{")
         indent()
         emit(f"{rs.name} {{")
@@ -1550,6 +1554,10 @@ def emit_element_data():
     emit("}")
 
 def emit_file():
+    if g_argv.nightly:
+        emit("#![allow(unused_attributes)]")
+        emit("#![feature(no_coverage)]")
+
     emit_lines(uses)
 
     rust_uses = []
@@ -1613,7 +1621,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("gen_rust.py")
     parser.add_argument("-i", help="Input ufbx_typed.json file")
     parser.add_argument("-o", help="Output path")
+    parser.add_argument("--nightly", action="store_true", help="Generate with nightly Rust features")
     argv = parser.parse_args()
+    g_argv = argv
 
     src_path = os.path.dirname(os.path.realpath(__file__))
 

@@ -20,6 +20,9 @@ resolver = "2"
 [dependencies]
 mint = { version = "0.5.8", optional = true, default-features = false }
 
+[features]
+nightly = []
+
 [dev-dependencies]
 panic-message = "0.3.0"
 libc = "0.2"
