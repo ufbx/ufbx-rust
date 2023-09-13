@@ -30,11 +30,6 @@ jobs:
         run: rustup toolchain install nightly
       - name: Setup llvm-tools-preview
         run: rustup component add llvm-tools-preview
-      - name: Generate source with nightly support
-        run: |
-          python3 bindgen/ufbx_parser.py -i ufbx/ufbx.h
-          python3 bindgen/ufbx_ir.py
-          python3 bindgen/generate_rust.py --nightly
       - name: Generate coverage
         run: bash misc/test_coverage.sh
       - uses: codecov/codecov-action@v3
