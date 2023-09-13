@@ -26,7 +26,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: grcov
-      - uses: Install Rust nightly
+      - name: Install Rust nightly
         run: rustup toolchain install nightly
       - name: Setup llvm-tools-preview
         run: rustup component add llvm-tools-preview
