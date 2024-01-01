@@ -1,5 +1,3 @@
-#![cfg_attr(feature="nightly", feature(no_coverage))]
-
 pub mod generated;
 pub mod prelude;
 
