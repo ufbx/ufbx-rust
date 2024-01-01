@@ -199,7 +199,7 @@ fn anim_override() {
     ];
 
     let anim_opts = ufbx::AnimOpts {
-        overrides: overrides.as_slice().into(),
+        prop_overrides: overrides.as_slice().into(),
         ..Default::default()
     };
     let anim = ufbx::create_anim(&scene, anim_opts)

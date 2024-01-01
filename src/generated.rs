@@ -2,8 +2,8 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, format_flags};
-use crate::prelude::{Allocator, Stream, call_open_file_cb, call_close_memory_cb, call_progress_cb};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, ThreadPoolContext, format_flags};
+use crate::prelude::{Allocator, Stream, call_open_file_cb, call_close_memory_cb, call_progress_cb, ThreadPool};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -349,14 +349,27 @@ pub struct Unknown {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum InheritType {
-    NoShear = 0,
-    Normal = 1,
-    NoScale = 2,
+pub enum InheritMode {
+    Normal = 0,
+    IgnoreParentScale = 1,
+    ComponentwiseScale = 2,
 }
 
-impl Default for InheritType {
-    fn default() -> Self { Self::NoShear }
+impl Default for InheritMode {
+    fn default() -> Self { Self::Normal }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MirrorAxis {
+    None = 0,
+    X = 1,
+    Y = 2,
+    Z = 3,
+}
+
+impl Default for MirrorAxis {
+    fn default() -> Self { Self::None }
 }
 
 #[repr(C)]
@@ -369,27 +382,37 @@ pub struct Node {
     pub camera: Option<Ref<Camera>>,
     pub attrib: Option<Ref<Element>>,
     pub geometry_transform_helper: Option<Ref<Node>>,
+    pub scale_helper: Option<Ref<Node>>,
     pub attrib_type: ElementType,
     pub all_attribs: RefList<Element>,
-    pub inherit_type: InheritType,
+    pub inherit_mode: InheritMode,
+    pub original_inherit_mode: InheritMode,
     pub local_transform: Transform,
     pub geometry_transform: Transform,
+    pub inherit_scale: Vec3,
+    pub inherit_scale_node: Option<Ref<Node>>,
     pub rotation_order: RotationOrder,
     pub euler_rotation: Vec3,
-    pub world_transform: Transform,
     pub node_to_parent: Matrix,
     pub node_to_world: Matrix,
     pub geometry_to_node: Matrix,
     pub geometry_to_world: Matrix,
+    pub unscaled_node_to_world: Matrix,
     pub adjust_pre_rotation: Quat,
-    pub adjust_pre_scale: Vec3,
+    pub adjust_pre_scale: Real,
     pub adjust_post_rotation: Quat,
+    pub adjust_post_scale: Real,
+    pub adjust_translation_scale: Real,
+    pub adjust_mirror_axis: MirrorAxis,
     pub materials: RefList<Material>,
     pub visible: bool,
     pub is_root: bool,
     pub has_geometry_transform: bool,
     pub has_adjust_transform: bool,
+    pub has_root_adjust_transform: bool,
     pub is_geometry_transform_helper: bool,
+    pub is_scale_helper: bool,
+    pub is_scale_compensate_parent: bool,
     pub node_depth: u32,
 }
 
@@ -617,6 +640,7 @@ pub struct Mesh {
     pub subdivision_display_mode: SubdivisionDisplayMode,
     pub subdivision_boundary: SubdivisionBoundary,
     pub subdivision_uv_boundary: SubdivisionBoundary,
+    pub reversed_winding: bool,
     pub generated_normals: bool,
     pub subdivision_evaluated: bool,
     pub subdivision_result: Option<Ref<SubdivisionResult>>,
@@ -894,8 +918,8 @@ pub struct ProceduralGeometry {
 #[repr(C)]
 pub struct StereoCamera {
     pub element: Element,
-    pub left: Ref<Camera>,
-    pub right: Ref<Camera>,
+    pub left: Option<Ref<Camera>>,
+    pub right: Option<Ref<Camera>>,
 }
 
 #[repr(C)]
@@ -1030,7 +1054,7 @@ pub struct BlendChannel {
     pub element: Element,
     pub weight: Real,
     pub keyframes: List<BlendKeyframe>,
-    pub target_shape: Ref<BlendShape>,
+    pub target_shape: Option<Ref<BlendShape>>,
 }
 
 #[repr(C)]
@@ -1099,6 +1123,8 @@ pub struct CacheFrame {
     pub time: f64,
     pub filename: String,
     pub file_format: CacheFileFormat,
+    pub mirror_axis: MirrorAxis,
+    pub scale_factor: Real,
     pub data_format: CacheDataFormat,
     pub data_encoding: CacheDataEncoding,
     pub data_offset: u64,
@@ -1113,6 +1139,8 @@ pub struct CacheChannel {
     pub interpretation: CacheInterpretation,
     pub interpretation_name: String,
     pub frames: List<CacheFrame>,
+    pub mirror_axis: MirrorAxis,
+    pub scale_factor: Real,
 }
 
 #[repr(C)]
@@ -1629,12 +1657,22 @@ pub struct PropOverride {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+#[derive(Default)]
+#[derive(Debug)]
+pub struct TransformOverride {
+    pub node_id: u32,
+    pub transform: Transform,
+}
+
+#[repr(C)]
 pub struct Anim {
     pub time_begin: f64,
     pub time_end: f64,
     pub layers: RefList<AnimLayer>,
     pub override_layer_weights: List<Real>,
-    pub overrides: List<PropOverride>,
+    pub prop_overrides: List<PropOverride>,
+    pub transform_overrides: List<TransformOverride>,
     pub ignore_connections: bool,
     pub custom: bool,
 }
@@ -1718,6 +1756,8 @@ pub struct Keyframe {
 pub struct AnimCurve {
     pub element: Element,
     pub keyframes: List<Keyframe>,
+    pub min_value: Real,
+    pub max_value: Real,
 }
 
 #[repr(C)]
@@ -1830,7 +1870,7 @@ pub struct BonePose {
 #[repr(C)]
 pub struct Pose {
     pub element: Element,
-    pub bind_pose: bool,
+    pub is_bind_pose: bool,
     pub bone_poses: List<BonePose>,
 }
 
@@ -1889,12 +1929,13 @@ pub enum WarningType {
     ImplicitMtl = 1,
     TruncatedArray = 2,
     MissingGeometryData = 3,
-    IndexClamped = 4,
-    BadUnicode = 5,
-    BadElementConnectedToRoot = 6,
-    DuplicateObjectId = 7,
-    EmptyFaceRemoved = 8,
-    UnknownObjDirective = 9,
+    DuplicateConnection = 4,
+    IndexClamped = 5,
+    BadUnicode = 6,
+    BadElementConnectedToRoot = 7,
+    DuplicateObjectId = 8,
+    EmptyFaceRemoved = 9,
+    UnknownObjDirective = 10,
 }
 
 impl Default for WarningType {
@@ -1921,6 +1962,18 @@ impl Default for ThumbnailFormat {
     fn default() -> Self { Self::Unknown }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpaceConversion {
+    TransformRoot = 0,
+    AdjustTransforms = 1,
+    ModifyGeometry = 2,
+}
+
+impl Default for SpaceConversion {
+    fn default() -> Self { Self::TransformRoot }
+}
+
 #[repr(C)]
 pub struct Thumbnail {
     pub props: Props,
@@ -1940,7 +1993,7 @@ pub struct Metadata {
     pub may_contain_missing_vertex_position: bool,
     pub may_contain_broken_elements: bool,
     pub is_unsafe: bool,
-    pub has_warning: [bool; 10],
+    pub has_warning: [bool; 11],
     pub creator: String,
     pub big_endian: bool,
     pub filename: String,
@@ -1968,6 +2021,11 @@ pub struct Metadata {
     pub ktime_second: i64,
     pub original_file_path: String,
     pub raw_original_file_path: Blob,
+    pub space_conversion: SpaceConversion,
+    pub root_rotation: Quat,
+    pub root_scale: Real,
+    pub mirror_axis: MirrorAxis,
+    pub geometry_scale: Real,
 }
 
 #[repr(u32)]
@@ -2318,8 +2376,9 @@ pub enum ErrorType {
     FeatureDisabled = 15,
     BadNurbs = 16,
     BadIndex = 17,
-    UnsafeOptions = 18,
-    DuplicateOverride = 19,
+    ThreadedAsciiParse = 18,
+    UnsafeOptions = 19,
+    DuplicateOverride = 20,
 }
 
 impl Default for ErrorType {
@@ -2445,13 +2504,92 @@ impl Default for GeometryTransformHandling {
 
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SpaceConversion {
-    TransformRoot = 0,
-    AdjustTransforms = 1,
+pub enum InheritModeHandling {
+    Preserve = 0,
+    HelperNodes = 1,
+    Compensate = 2,
+    Ignore = 3,
 }
 
-impl Default for SpaceConversion {
-    fn default() -> Self { Self::TransformRoot }
+impl Default for InheritModeHandling {
+    fn default() -> Self { Self::Preserve }
+}
+
+#[repr(C)]
+pub struct BakedVec3 {
+    pub time: f64,
+    pub value: Vec3,
+}
+
+#[repr(C)]
+pub struct BakedQuat {
+    pub time: f64,
+    pub value: Quat,
+}
+
+#[repr(C)]
+pub struct BakedNode {
+    pub typed_id: u32,
+    pub element_id: u32,
+    pub constant_translation: bool,
+    pub constant_rotation: bool,
+    pub constant_scale: bool,
+    pub translation_keys: List<BakedVec3>,
+    pub rotation_keys: List<BakedQuat>,
+    pub scale_keys: List<BakedVec3>,
+}
+
+#[repr(C)]
+pub struct BakedProp {
+    pub name: String,
+    pub constant_value: bool,
+    pub keys: List<BakedVec3>,
+}
+
+#[repr(C)]
+pub struct BakedElement {
+    pub element_id: u32,
+    pub props: List<BakedProp>,
+}
+
+#[repr(C)]
+pub struct BakedAnim {
+    pub nodes: List<BakedNode>,
+    pub elements: List<BakedElement>,
+}
+
+#[repr(C)]
+pub struct ThreadPoolInfo {
+    pub max_concurrent_tasks: u32,
+}
+
+#[repr(C)]
+pub struct RawThreadPool {
+    pub init_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, *const ThreadPoolInfo) -> bool>,
+    pub run_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, u32, u32, u32) -> bool>,
+    pub wait_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, u32, u32) -> bool>,
+    pub free_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext)>,
+    pub user: *mut c_void,
+}
+
+impl Default for RawThreadPool {
+    fn default() -> Self {
+        RawThreadPool {
+            init_fn: None,
+            run_fn: None,
+            wait_fn: None,
+            free_fn: None,
+            user: ptr::null::<c_void>() as *mut c_void,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct RawThreadOpts {
+    pub pool: RawThreadPool,
+    pub num_tasks: usize,
+    pub memory_limit: usize,
 }
 
 #[repr(C)]
@@ -2460,6 +2598,7 @@ pub struct RawLoadOpts {
     pub _begin_zero: u32,
     pub temp_allocator: RawAllocatorOpts,
     pub result_allocator: RawAllocatorOpts,
+    pub thread_opts: RawThreadOpts,
     pub ignore_geometry: bool,
     pub ignore_animation: bool,
     pub ignore_embedded: bool,
@@ -2473,6 +2612,7 @@ pub struct RawLoadOpts {
     pub clean_skin_weights: bool,
     pub disable_quirks: bool,
     pub strict: bool,
+    pub force_single_thread_ascii_parsing: bool,
     pub allow_unsafe: bool,
     pub index_error_handling: IndexErrorHandling,
     pub connect_broken_elements: bool,
@@ -2490,18 +2630,22 @@ pub struct RawLoadOpts {
     pub progress_interval_hint: u64,
     pub open_file_cb: RawOpenFileCb,
     pub geometry_transform_handling: GeometryTransformHandling,
+    pub inherit_mode_handling: InheritModeHandling,
     pub space_conversion: SpaceConversion,
+    pub handedness_conversion_axis: MirrorAxis,
+    pub handedness_conversion_retain_winding: bool,
+    pub reverse_winding: bool,
     pub target_axes: CoordinateAxes,
     pub target_unit_meters: Real,
     pub target_camera_axes: CoordinateAxes,
     pub target_light_axes: CoordinateAxes,
     pub geometry_transform_helper_name: RawString,
-    pub no_prop_unit_scaling: bool,
-    pub no_anim_curve_unit_scaling: bool,
+    pub scale_helper_name: RawString,
     pub normalize_normals: bool,
     pub normalize_tangents: bool,
     pub use_root_transform: bool,
     pub root_transform: Transform,
+    pub key_clamp_threshold: f64,
     pub unicode_error_handling: UnicodeErrorHandling,
     pub retain_dom: bool,
     pub file_format: FileFormat,
@@ -2546,9 +2690,33 @@ pub struct RawAnimOpts {
     pub _begin_zero: u32,
     pub layer_ids: RawList<u32>,
     pub override_layer_weights: RawList<Real>,
-    pub overrides: RawList<RawPropOverrideDesc>,
+    pub prop_overrides: RawList<RawPropOverrideDesc>,
+    pub transform_overrides: RawList<TransformOverride>,
     pub ignore_connections: bool,
     pub result_allocator: RawAllocatorOpts,
+    pub _end_zero: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct RawBakeOpts {
+    pub _begin_zero: u32,
+    pub temp_allocator: RawAllocatorOpts,
+    pub result_allocator: RawAllocatorOpts,
+    pub time_start_offset: f64,
+    pub resample_rate: f64,
+    pub minimum_sample_rate: f64,
+    pub bake_transform_props: bool,
+    pub skip_node_transforms: bool,
+    pub no_resample_rotation: bool,
+    pub ignore_layer_weight_animation: bool,
+    pub max_keyframe_segments: usize,
+    pub constant_timestep: f64,
+    pub key_reduction_enabled: bool,
+    pub key_reduction_rotation: bool,
+    pub key_reduction_threshold: f64,
+    pub key_reduction_passes: usize,
+    pub compensate_inherit_no_scale: bool,
     pub _end_zero: u32,
 }
 
@@ -2601,6 +2769,9 @@ pub struct RawGeometryCacheOpts {
     pub result_allocator: RawAllocatorOpts,
     pub open_file_cb: RawOpenFileCb,
     pub frames_per_second: f64,
+    pub mirror_axis: MirrorAxis,
+    pub use_scale_factor: bool,
+    pub scale_factor: Real,
     pub _end_zero: u32,
 }
 
@@ -2612,6 +2783,7 @@ pub struct RawGeometryCacheDataOpts {
     pub additive: bool,
     pub use_weight: bool,
     pub weight: Real,
+    pub ignore_transform: bool,
     pub _end_zero: u32,
 }
 
@@ -2630,6 +2802,63 @@ impl Panic {
             str::from_utf8(mem::transmute(&buf[..self.message_length])).unwrap()
         }
     }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct TransformFlags(u32);
+impl TransformFlags {
+    pub const NONE: TransformFlags = TransformFlags(0);
+    pub const IGNORE_SCALE_HELPER: TransformFlags = TransformFlags(0x1);
+    pub const IGNORE_COMPONENTWISE_SCALE: TransformFlags = TransformFlags(0x2);
+    pub const EXPLICIT_INCLUDES: TransformFlags = TransformFlags(0x4);
+    pub const INCLUDE_TRANSLATION: TransformFlags = TransformFlags(0x10);
+    pub const INCLUDE_ROTATION: TransformFlags = TransformFlags(0x20);
+    pub const INCLUDE_SCALE: TransformFlags = TransformFlags(0x40);
+}
+
+const TRANSFORMFLAGS_NAMES: [(&'static str, u32); 6] = [
+    ("IGNORE_SCALE_HELPER", 0x1),
+    ("IGNORE_COMPONENTWISE_SCALE", 0x2),
+    ("EXPLICIT_INCLUDES", 0x4),
+    ("INCLUDE_TRANSLATION", 0x10),
+    ("INCLUDE_ROTATION", 0x20),
+    ("INCLUDE_SCALE", 0x40),
+];
+
+impl TransformFlags {
+    pub fn any(self) -> bool { self.0 != 0 }
+    pub fn has_any(self, bits: Self) -> bool { (self.0 & bits.0) != 0 }
+    pub fn has_all(self, bits: Self) -> bool { (self.0 & bits.0) == bits.0 }
+}
+impl Default for TransformFlags {
+    fn default() -> Self { Self(0) }
+}
+impl Debug for TransformFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_flags(f, &TRANSFORMFLAGS_NAMES, self.0)
+    }
+}
+impl BitAnd for TransformFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output { Self(self.0 & rhs.0) }
+}
+impl BitAndAssign for TransformFlags {
+    fn bitand_assign(&mut self, rhs: Self) { *self = Self(self.0 & rhs.0) }
+}
+impl BitOr for TransformFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output { Self(self.0 | rhs.0) }
+}
+impl BitOrAssign for TransformFlags {
+    fn bitor_assign(&mut self, rhs: Self) { *self = Self(self.0 | rhs.0) }
+}
+impl BitXor for TransformFlags {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output { Self(self.0 ^ rhs.0) }
+}
+impl BitXorAssign for TransformFlags {
+    fn bitxor_assign(&mut self, rhs: Self) { *self = Self(self.0 ^ rhs.0) }
 }
 
 #[derive(Default)]
@@ -2818,9 +3047,39 @@ impl ProgressCb<'_> {
 }
 
 #[derive(Default)]
+pub struct ThreadOpts {
+    pub pool: ThreadPool<>,
+    pub num_tasks: usize,
+    pub memory_limit: usize,
+}
+
+impl FromRust for ThreadOpts {
+    type Result = RawThreadOpts;
+    #[allow(unused, unused_variables, dead_code)]
+    #[cfg_attr(feature="nightly", no_coverage)]
+    fn from_rust(&self, arena: &mut Arena) -> Self::Result {
+        RawThreadOpts {
+            pool: self.pool.from_rust(),
+            num_tasks: self.num_tasks,
+            memory_limit: self.memory_limit,
+        }
+    }
+    #[allow(unused, unused_variables, dead_code)]
+    #[cfg_attr(feature="nightly", no_coverage)]
+    fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
+        RawThreadOpts {
+            pool: self.pool.from_rust_mut(),
+            num_tasks: self.num_tasks,
+            memory_limit: self.memory_limit,
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct LoadOpts<'a> {
     pub temp_allocator: AllocatorOpts<>,
     pub result_allocator: AllocatorOpts<>,
+    pub thread_opts: ThreadOpts<>,
     pub ignore_geometry: bool,
     pub ignore_animation: bool,
     pub ignore_embedded: bool,
@@ -2834,6 +3093,7 @@ pub struct LoadOpts<'a> {
     pub clean_skin_weights: bool,
     pub disable_quirks: bool,
     pub strict: bool,
+    pub force_single_thread_ascii_parsing: bool,
     pub allow_unsafe: Unsafe<bool>,
     pub index_error_handling: IndexErrorHandling,
     pub connect_broken_elements: bool,
@@ -2851,18 +3111,22 @@ pub struct LoadOpts<'a> {
     pub progress_interval_hint: u64,
     pub open_file_cb: OpenFileCb<'a>,
     pub geometry_transform_handling: GeometryTransformHandling,
+    pub inherit_mode_handling: InheritModeHandling,
     pub space_conversion: SpaceConversion,
+    pub handedness_conversion_axis: MirrorAxis,
+    pub handedness_conversion_retain_winding: bool,
+    pub reverse_winding: bool,
     pub target_axes: CoordinateAxes,
     pub target_unit_meters: Real,
     pub target_camera_axes: CoordinateAxes,
     pub target_light_axes: CoordinateAxes,
     pub geometry_transform_helper_name: StringOpt<'a>,
-    pub no_prop_unit_scaling: bool,
-    pub no_anim_curve_unit_scaling: bool,
+    pub scale_helper_name: StringOpt<'a>,
     pub normalize_normals: bool,
     pub normalize_tangents: bool,
     pub use_root_transform: bool,
     pub root_transform: Transform,
+    pub key_clamp_threshold: f64,
     pub unicode_error_handling: UnicodeErrorHandling,
     pub retain_dom: bool,
     pub file_format: FileFormat,
@@ -2886,6 +3150,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             _begin_zero: 0,
             temp_allocator: self.temp_allocator.from_rust(arena),
             result_allocator: self.result_allocator.from_rust(arena),
+            thread_opts: self.thread_opts.from_rust(arena),
             ignore_geometry: self.ignore_geometry,
             ignore_animation: self.ignore_animation,
             ignore_embedded: self.ignore_embedded,
@@ -2899,6 +3164,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             clean_skin_weights: self.clean_skin_weights,
             disable_quirks: self.disable_quirks,
             strict: self.strict,
+            force_single_thread_ascii_parsing: self.force_single_thread_ascii_parsing,
             allow_unsafe: panic!("required mutable"),
             index_error_handling: self.index_error_handling,
             connect_broken_elements: self.connect_broken_elements,
@@ -2916,18 +3182,22 @@ impl<'a> FromRust for LoadOpts<'a> {
             progress_interval_hint: self.progress_interval_hint,
             open_file_cb: self.open_file_cb.from_rust(),
             geometry_transform_handling: self.geometry_transform_handling,
+            inherit_mode_handling: self.inherit_mode_handling,
             space_conversion: self.space_conversion,
+            handedness_conversion_axis: self.handedness_conversion_axis,
+            handedness_conversion_retain_winding: self.handedness_conversion_retain_winding,
+            reverse_winding: self.reverse_winding,
             target_axes: self.target_axes,
             target_unit_meters: self.target_unit_meters,
             target_camera_axes: self.target_camera_axes,
             target_light_axes: self.target_light_axes,
             geometry_transform_helper_name: self.geometry_transform_helper_name.from_rust(arena),
-            no_prop_unit_scaling: self.no_prop_unit_scaling,
-            no_anim_curve_unit_scaling: self.no_anim_curve_unit_scaling,
+            scale_helper_name: self.scale_helper_name.from_rust(arena),
             normalize_normals: self.normalize_normals,
             normalize_tangents: self.normalize_tangents,
             use_root_transform: self.use_root_transform,
             root_transform: self.root_transform,
+            key_clamp_threshold: self.key_clamp_threshold,
             unicode_error_handling: self.unicode_error_handling,
             retain_dom: self.retain_dom,
             file_format: self.file_format,
@@ -2950,6 +3220,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             _begin_zero: 0,
             temp_allocator: self.temp_allocator.from_rust_mut(arena),
             result_allocator: self.result_allocator.from_rust_mut(arena),
+            thread_opts: self.thread_opts.from_rust_mut(arena),
             ignore_geometry: self.ignore_geometry,
             ignore_animation: self.ignore_animation,
             ignore_embedded: self.ignore_embedded,
@@ -2963,6 +3234,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             clean_skin_weights: self.clean_skin_weights,
             disable_quirks: self.disable_quirks,
             strict: self.strict,
+            force_single_thread_ascii_parsing: self.force_single_thread_ascii_parsing,
             allow_unsafe: self.allow_unsafe.take(),
             index_error_handling: self.index_error_handling,
             connect_broken_elements: self.connect_broken_elements,
@@ -2980,18 +3252,22 @@ impl<'a> FromRust for LoadOpts<'a> {
             progress_interval_hint: self.progress_interval_hint,
             open_file_cb: self.open_file_cb.from_rust_mut(),
             geometry_transform_handling: self.geometry_transform_handling,
+            inherit_mode_handling: self.inherit_mode_handling,
             space_conversion: self.space_conversion,
+            handedness_conversion_axis: self.handedness_conversion_axis,
+            handedness_conversion_retain_winding: self.handedness_conversion_retain_winding,
+            reverse_winding: self.reverse_winding,
             target_axes: self.target_axes,
             target_unit_meters: self.target_unit_meters,
             target_camera_axes: self.target_camera_axes,
             target_light_axes: self.target_light_axes,
             geometry_transform_helper_name: self.geometry_transform_helper_name.from_rust_mut(arena),
-            no_prop_unit_scaling: self.no_prop_unit_scaling,
-            no_anim_curve_unit_scaling: self.no_anim_curve_unit_scaling,
+            scale_helper_name: self.scale_helper_name.from_rust_mut(arena),
             normalize_normals: self.normalize_normals,
             normalize_tangents: self.normalize_tangents,
             use_root_transform: self.use_root_transform,
             root_transform: self.root_transform,
+            key_clamp_threshold: self.key_clamp_threshold,
             unicode_error_handling: self.unicode_error_handling,
             retain_dom: self.retain_dom,
             file_format: self.file_format,
@@ -3090,7 +3366,8 @@ impl<'a> FromRust for PropOverrideDesc<'a> {
 pub struct AnimOpts<'a> {
     pub layer_ids: ListOpt<'a, u32>,
     pub override_layer_weights: ListOpt<'a, Real>,
-    pub overrides: ListOpt<'a, PropOverrideDesc<'a>>,
+    pub prop_overrides: ListOpt<'a, PropOverrideDesc<'a>>,
+    pub transform_overrides: ListOpt<'a, TransformOverride>,
     pub ignore_connections: bool,
     pub result_allocator: AllocatorOpts<>,
 }
@@ -3104,7 +3381,8 @@ impl<'a> FromRust for AnimOpts<'a> {
             _begin_zero: 0,
             layer_ids: self.layer_ids.from_rust(arena),
             override_layer_weights: self.override_layer_weights.from_rust(arena),
-            overrides: self.overrides.from_rust(arena),
+            prop_overrides: self.prop_overrides.from_rust(arena),
+            transform_overrides: self.transform_overrides.from_rust(arena),
             ignore_connections: self.ignore_connections,
             result_allocator: self.result_allocator.from_rust(arena),
             _end_zero: 0,
@@ -3117,9 +3395,82 @@ impl<'a> FromRust for AnimOpts<'a> {
             _begin_zero: 0,
             layer_ids: self.layer_ids.from_rust_mut(arena),
             override_layer_weights: self.override_layer_weights.from_rust_mut(arena),
-            overrides: self.overrides.from_rust_mut(arena),
+            prop_overrides: self.prop_overrides.from_rust_mut(arena),
+            transform_overrides: self.transform_overrides.from_rust_mut(arena),
             ignore_connections: self.ignore_connections,
             result_allocator: self.result_allocator.from_rust_mut(arena),
+            _end_zero: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct BakeOpts {
+    pub temp_allocator: AllocatorOpts<>,
+    pub result_allocator: AllocatorOpts<>,
+    pub time_start_offset: f64,
+    pub resample_rate: f64,
+    pub minimum_sample_rate: f64,
+    pub bake_transform_props: bool,
+    pub skip_node_transforms: bool,
+    pub no_resample_rotation: bool,
+    pub ignore_layer_weight_animation: bool,
+    pub max_keyframe_segments: usize,
+    pub constant_timestep: f64,
+    pub key_reduction_enabled: bool,
+    pub key_reduction_rotation: bool,
+    pub key_reduction_threshold: f64,
+    pub key_reduction_passes: usize,
+    pub compensate_inherit_no_scale: bool,
+}
+
+impl FromRust for BakeOpts {
+    type Result = RawBakeOpts;
+    #[allow(unused, unused_variables, dead_code)]
+    #[cfg_attr(feature="nightly", no_coverage)]
+    fn from_rust(&self, arena: &mut Arena) -> Self::Result {
+        RawBakeOpts {
+            _begin_zero: 0,
+            temp_allocator: self.temp_allocator.from_rust(arena),
+            result_allocator: self.result_allocator.from_rust(arena),
+            time_start_offset: self.time_start_offset,
+            resample_rate: self.resample_rate,
+            minimum_sample_rate: self.minimum_sample_rate,
+            bake_transform_props: self.bake_transform_props,
+            skip_node_transforms: self.skip_node_transforms,
+            no_resample_rotation: self.no_resample_rotation,
+            ignore_layer_weight_animation: self.ignore_layer_weight_animation,
+            max_keyframe_segments: self.max_keyframe_segments,
+            constant_timestep: self.constant_timestep,
+            key_reduction_enabled: self.key_reduction_enabled,
+            key_reduction_rotation: self.key_reduction_rotation,
+            key_reduction_threshold: self.key_reduction_threshold,
+            key_reduction_passes: self.key_reduction_passes,
+            compensate_inherit_no_scale: self.compensate_inherit_no_scale,
+            _end_zero: 0,
+        }
+    }
+    #[allow(unused, unused_variables, dead_code)]
+    #[cfg_attr(feature="nightly", no_coverage)]
+    fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
+        RawBakeOpts {
+            _begin_zero: 0,
+            temp_allocator: self.temp_allocator.from_rust_mut(arena),
+            result_allocator: self.result_allocator.from_rust_mut(arena),
+            time_start_offset: self.time_start_offset,
+            resample_rate: self.resample_rate,
+            minimum_sample_rate: self.minimum_sample_rate,
+            bake_transform_props: self.bake_transform_props,
+            skip_node_transforms: self.skip_node_transforms,
+            no_resample_rotation: self.no_resample_rotation,
+            ignore_layer_weight_animation: self.ignore_layer_weight_animation,
+            max_keyframe_segments: self.max_keyframe_segments,
+            constant_timestep: self.constant_timestep,
+            key_reduction_enabled: self.key_reduction_enabled,
+            key_reduction_rotation: self.key_reduction_rotation,
+            key_reduction_threshold: self.key_reduction_threshold,
+            key_reduction_passes: self.key_reduction_passes,
+            compensate_inherit_no_scale: self.compensate_inherit_no_scale,
             _end_zero: 0,
         }
     }
@@ -3263,6 +3614,9 @@ pub struct GeometryCacheOpts<'a> {
     pub result_allocator: AllocatorOpts<>,
     pub open_file_cb: OpenFileCb<'a>,
     pub frames_per_second: f64,
+    pub mirror_axis: MirrorAxis,
+    pub use_scale_factor: bool,
+    pub scale_factor: Real,
 }
 
 impl<'a> FromRust for GeometryCacheOpts<'a> {
@@ -3276,6 +3630,9 @@ impl<'a> FromRust for GeometryCacheOpts<'a> {
             result_allocator: self.result_allocator.from_rust(arena),
             open_file_cb: self.open_file_cb.from_rust(),
             frames_per_second: self.frames_per_second,
+            mirror_axis: self.mirror_axis,
+            use_scale_factor: self.use_scale_factor,
+            scale_factor: self.scale_factor,
             _end_zero: 0,
         }
     }
@@ -3288,6 +3645,9 @@ impl<'a> FromRust for GeometryCacheOpts<'a> {
             result_allocator: self.result_allocator.from_rust_mut(arena),
             open_file_cb: self.open_file_cb.from_rust_mut(),
             frames_per_second: self.frames_per_second,
+            mirror_axis: self.mirror_axis,
+            use_scale_factor: self.use_scale_factor,
+            scale_factor: self.scale_factor,
             _end_zero: 0,
         }
     }
@@ -3299,6 +3659,7 @@ pub struct GeometryCacheDataOpts<'a> {
     pub additive: bool,
     pub use_weight: bool,
     pub weight: Real,
+    pub ignore_transform: bool,
 }
 
 impl<'a> FromRust for GeometryCacheDataOpts<'a> {
@@ -3312,6 +3673,7 @@ impl<'a> FromRust for GeometryCacheDataOpts<'a> {
             additive: self.additive,
             use_weight: self.use_weight,
             weight: self.weight,
+            ignore_transform: self.ignore_transform,
             _end_zero: 0,
         }
     }
@@ -3324,6 +3686,7 @@ impl<'a> FromRust for GeometryCacheDataOpts<'a> {
             additive: self.additive,
             use_weight: self.use_weight,
             weight: self.weight,
+            ignore_transform: self.ignore_transform,
             _end_zero: 0,
         }
     }
@@ -3385,11 +3748,17 @@ extern "C" {
     pub fn ufbx_evaluate_prop_len(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64) -> Prop;
     pub fn ufbx_evaluate_props(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize) -> Props;
     pub fn ufbx_evaluate_transform(anim: *const Anim, node: *const Node, time: f64) -> Transform;
+    pub fn ufbx_evaluate_transform_flags(anim: *const Anim, node: *const Node, time: f64, flags: u32) -> Transform;
     pub fn ufbx_evaluate_blend_weight(anim: *const Anim, channel: *const BlendChannel, time: f64) -> Real;
     pub fn ufbx_evaluate_scene(scene: *const Scene, anim: *const Anim, time: f64, opts: *const RawEvaluateOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_create_anim(scene: *const Scene, opts: *const RawAnimOpts, error: *mut Error) -> *mut Anim;
     pub fn ufbx_retain_anim(anim: *mut Anim);
     pub fn ufbx_free_anim(anim: *mut Anim);
+    pub fn ufbx_bake_anim(scene: *const Scene, anim: *const Anim, opts: *const RawBakeOpts, error: *mut Error) -> *mut BakedAnim;
+    pub fn ufbx_retain_baked_anim(bake: *mut BakedAnim);
+    pub fn ufbx_free_baked_anim(bake: *mut BakedAnim);
+    pub fn ufbx_evaluate_baked_vec3(keyframes: List<BakedVec3>, time: f64) -> Vec3;
+    pub fn ufbx_evaluate_baked_quat(keyframes: List<BakedQuat>, time: f64) -> Quat;
     pub fn ufbx_find_prop_texture_len(material: *const Material, name: *const u8, name_len: usize) -> *mut Texture;
     pub fn ufbx_find_shader_prop_len(shader: *const Shader, name: *const u8, name_len: usize) -> String;
     pub fn ufbx_find_shader_prop_bindings_len(shader: *const Shader, name: *const u8, name_len: usize) -> List<ShaderPropBinding>;
@@ -3412,6 +3781,7 @@ extern "C" {
     pub fn ufbx_transform_to_matrix(t: *const Transform) -> Matrix;
     pub fn ufbx_matrix_to_transform(m: *const Matrix) -> Transform;
     pub fn ufbx_catch_get_skin_vertex_matrix(panic: *mut Panic, skin: *const SkinDeformer, vertex: usize, fallback: *const Matrix) -> Matrix;
+    pub fn ufbx_get_blend_shape_offset_index(shape: *const BlendShape, vertex: usize) -> u32;
     pub fn ufbx_get_blend_shape_vertex_offset(shape: *const BlendShape, vertex: usize) -> Vec3;
     pub fn ufbx_get_blend_vertex_offset(blend: *const BlendDeformer, vertex: usize) -> Vec3;
     pub fn ufbx_add_blend_shape_vertex_offsets(shape: *const BlendShape, vertices: *mut Vec3, num_vertices: usize, weight: Real);
@@ -3446,6 +3816,9 @@ extern "C" {
     pub fn ufbx_sample_geometry_cache_vec3(channel: *const CacheChannel, time: f64, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_dom_find_len(parent: *const DomNode, name: *const u8, name_len: usize) -> *mut DomNode;
     pub fn ufbx_generate_indices(streams: *const RawVertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
+    pub fn ufbx_thread_pool_run_task(ctx: ThreadPoolContext, index: u32);
+    pub fn ufbx_thread_pool_set_user_ptr(ctx: ThreadPoolContext, user_ptr: *mut c_void);
+    pub fn ufbx_thread_pool_get_user_ptr(ctx: ThreadPoolContext) -> *mut c_void;
     pub fn ufbx_catch_get_vertex_real(panic: *mut Panic, v: *const VertexReal, index: usize) -> Real;
     pub fn ufbx_catch_get_vertex_vec2(panic: *mut Panic, v: *const VertexVec2, index: usize) -> Vec2;
     pub fn ufbx_catch_get_vertex_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Vec3;
@@ -3524,6 +3897,8 @@ extern "C" {
     pub fn ufbx_ffi_get_weighted_face_normal(retval: *mut Vec3, positions: *const VertexVec3, face: *const Face);
     pub fn ufbx_ffi_get_triangulate_face_num_indices(face: *const Face) -> usize;
     pub fn ufbx_ffi_triangulate_face(indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: *const Face) -> u32;
+    pub fn ufbx_ffi_evaluate_baked_vec3(keyframes: *const BakedVec3, num_keyframes: usize, time: f64) -> Vec3;
+    pub fn ufbx_ffi_evaluate_baked_quat(keyframes: *const BakedQuat, num_keyframes: usize, time: f64) -> Quat;
 }
 pub struct SceneRoot {
     scene: *mut Scene,
@@ -3548,6 +3923,11 @@ pub struct GeometryCacheRoot {
 pub struct AnimRoot {
     anim: *mut Anim,
     _marker: marker::PhantomData<Anim>,
+}
+
+pub struct BakedAnimRoot {
+    anim: *mut BakedAnim,
+    _marker: marker::PhantomData<BakedAnim>,
 }
 
 impl SceneRoot {
@@ -3596,6 +3976,15 @@ impl AnimRoot {
     }
 }
 
+impl BakedAnimRoot {
+    fn new(anim: *mut BakedAnim) -> BakedAnimRoot {
+        BakedAnimRoot {
+            anim: anim,
+            _marker: marker::PhantomData,
+        }
+    }
+}
+
 impl Drop for SceneRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_scene(self.scene) }
@@ -3623,6 +4012,12 @@ impl Drop for GeometryCacheRoot {
 impl Drop for AnimRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_anim(self.anim) }
+    }
+}
+
+impl Drop for BakedAnimRoot {
+    fn drop(&mut self) {
+        unsafe { ufbx_free_baked_anim(self.anim) }
     }
 }
 
@@ -3661,6 +4056,13 @@ impl Clone for AnimRoot {
     }
 }
 
+impl Clone for BakedAnimRoot {
+    fn clone(&self) -> Self {
+        unsafe { ufbx_retain_baked_anim(self.anim) }
+        BakedAnimRoot::new(self.anim)
+    }
+}
+
 impl Deref for SceneRoot {
     type Target = Scene;
     fn deref(&self) -> &Self::Target {
@@ -3696,6 +4098,13 @@ impl Deref for AnimRoot {
     }
 }
 
+impl Deref for BakedAnimRoot {
+    type Target = BakedAnim;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.anim }
+    }
+}
+
 unsafe impl Send for SceneRoot {}
 unsafe impl Sync for SceneRoot {}
 
@@ -3710,6 +4119,9 @@ unsafe impl Sync for GeometryCacheRoot {}
 
 unsafe impl Send for AnimRoot {}
 unsafe impl Sync for AnimRoot {}
+
+unsafe impl Send for BakedAnimRoot {}
+unsafe impl Sync for BakedAnimRoot {}
 
 pub fn is_thread_safe() -> bool {
     let result = unsafe { ufbx_is_thread_safe() };
@@ -3951,6 +4363,11 @@ pub fn evaluate_transform(anim: &Anim, node: &Node, time: f64) -> Transform {
     result
 }
 
+pub fn evaluate_transform_flags(anim: &Anim, node: &Node, time: f64, flags: u32) -> Transform {
+    let result = unsafe { ufbx_evaluate_transform_flags(anim as *const Anim, node as *const Node, time, flags) };
+    result
+}
+
 pub fn evaluate_blend_weight(anim: &Anim, channel: &BlendChannel, time: f64) -> Real {
     let result = unsafe { ufbx_evaluate_blend_weight(anim as *const Anim, channel as *const BlendChannel, time) };
     result
@@ -3986,6 +4403,32 @@ pub fn create_anim(scene: &Scene, opts: AnimOpts) -> Result<AnimRoot> {
     let mut opts_mut = opts;
     let opts_raw = opts_mut.from_rust_mut(&mut arena);
     unsafe { create_anim_raw(scene, &opts_raw) }
+}
+
+pub unsafe fn bake_anim_raw(scene: &Scene, anim: &Anim, opts: &RawBakeOpts) -> Result<BakedAnimRoot> {
+    let mut error: Error = Error::default();
+    let result = { ufbx_bake_anim(scene as *const Scene, anim as *const Anim, opts as *const RawBakeOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(BakedAnimRoot::new(result))
+}
+
+pub fn bake_anim(scene: &Scene, anim: &Anim, opts: BakeOpts) -> Result<BakedAnimRoot> {
+    let mut arena = Arena::new();
+    let mut opts_mut = opts;
+    let opts_raw = opts_mut.from_rust_mut(&mut arena);
+    unsafe { bake_anim_raw(scene, anim, &opts_raw) }
+}
+
+pub fn evaluate_baked_vec3(keyframes: &[BakedVec3], time: f64) -> Vec3 {
+    let result = unsafe { ufbx_ffi_evaluate_baked_vec3(keyframes.as_ptr(), keyframes.len(), time) };
+    result
+}
+
+pub fn evaluate_baked_quat(keyframes: &[BakedQuat], time: f64) -> Quat {
+    let result = unsafe { ufbx_ffi_evaluate_baked_quat(keyframes.as_ptr(), keyframes.len(), time) };
+    result
 }
 
 pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> Option<&'a Texture> {
@@ -4099,6 +4542,11 @@ pub fn get_skin_vertex_matrix(skin: &SkinDeformer, vertex: usize, fallback: &Mat
     if panic.did_panic {
         panic!("ufbx::get_skin_vertex_matrix() {}", panic.message());
     }
+    result
+}
+
+pub fn get_blend_shape_offset_index(shape: &BlendShape, vertex: usize) -> u32 {
+    let result = unsafe { ufbx_get_blend_shape_offset_index(shape as *const BlendShape, vertex) };
     result
 }
 
@@ -4333,6 +4781,18 @@ pub fn generate_indices(streams: &mut [VertexStream], indices: &mut [u32], alloc
     let mut allocator_mut = allocator;
     let allocator_raw = allocator_mut.from_rust_mut(&mut arena);
     unsafe { generate_indices_raw(&streams_raw, indices, &allocator_raw) }
+}
+
+pub unsafe fn thread_pool_run_task(ctx: ThreadPoolContext, index: u32) {
+    { ufbx_thread_pool_run_task(ctx, index) };
+}
+
+pub unsafe fn thread_pool_set_user_ptr(ctx: ThreadPoolContext, user_ptr: *mut c_void) {
+    ufbx_thread_pool_set_user_ptr(ctx, user_ptr as *mut c_void)
+}
+
+pub unsafe fn thread_pool_get_user_ptr(ctx: ThreadPoolContext) -> *mut c_void {
+    ufbx_thread_pool_get_user_ptr(ctx)
 }
 
 pub fn get_vertex_real(v: &VertexReal, index: usize) -> Real {

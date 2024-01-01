@@ -11,11 +11,12 @@ use std::mem;
 use std::string;
 use std::ptr::NonNull;
 use std::fmt::{self, Debug, Display, Formatter};
-use crate::OpenFileInfo;
+use crate::{OpenFileInfo, RawThreadPool};
 use crate::generated::{RawStream, RawAllocator, RawVertexStream, Progress, ProgressResult, Error, Vec2, Vec3, Vec4};
 use crate::generated::format_error;
 
 pub type Real = f64;
+pub type ThreadPoolContext = usize;
 
 #[repr(C)]
 pub struct List<T> {
@@ -424,6 +425,41 @@ impl Allocator {
         },
         Allocator::Raw(raw) => raw.take(),
         _ => Self::from_rust(self),
+        }
+    }
+}
+
+pub enum ThreadPool {
+    None,
+    Raw(Unsafe<RawThreadPool>),
+}
+
+impl Default for ThreadPool {
+    fn default() -> Self { ThreadPool::None }
+}
+impl ThreadPool {
+    pub(crate) fn from_rust(&self) -> RawThreadPool {
+        match self {
+        ThreadPool::None => RawThreadPool {
+            init_fn: None,
+            run_fn: None,
+            wait_fn: None,
+            free_fn: None,
+            user: ptr::null::<c_void>() as *mut c_void,
+        },
+        _ => panic!("required mutable reference"),
+        }
+    }
+    pub(crate) fn from_rust_mut(&mut self) -> RawThreadPool {
+        match self {
+        ThreadPool::None => RawThreadPool {
+            init_fn: None,
+            run_fn: None,
+            wait_fn: None,
+            free_fn: None,
+            user: ptr::null::<c_void>() as *mut c_void,
+        },
+        ThreadPool::Raw(raw) => raw.take(),
         }
     }
 }

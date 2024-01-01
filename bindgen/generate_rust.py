@@ -12,7 +12,7 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, format_flags};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, ThreadPoolContext, format_flags};
 """.strip()
 
 post_ffi = r"""
@@ -40,6 +40,11 @@ pub struct GeometryCacheRoot {
 pub struct AnimRoot {
     anim: *mut Anim,
     _marker: marker::PhantomData<Anim>,
+}
+
+pub struct BakedAnimRoot {
+    anim: *mut BakedAnim,
+    _marker: marker::PhantomData<BakedAnim>,
 }
 
 impl SceneRoot {
@@ -88,6 +93,15 @@ impl AnimRoot {
     }
 }
 
+impl BakedAnimRoot {
+    fn new(anim: *mut BakedAnim) -> BakedAnimRoot {
+        BakedAnimRoot {
+            anim: anim,
+            _marker: marker::PhantomData,
+        }
+    }
+}
+
 impl Drop for SceneRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_scene(self.scene) }
@@ -115,6 +129,12 @@ impl Drop for GeometryCacheRoot {
 impl Drop for AnimRoot {
     fn drop(&mut self) {
         unsafe { ufbx_free_anim(self.anim) }
+    }
+}
+
+impl Drop for BakedAnimRoot {
+    fn drop(&mut self) {
+        unsafe { ufbx_free_baked_anim(self.anim) }
     }
 }
 
@@ -153,6 +173,13 @@ impl Clone for AnimRoot {
     }
 }
 
+impl Clone for BakedAnimRoot {
+    fn clone(&self) -> Self {
+        unsafe { ufbx_retain_baked_anim(self.anim) }
+        BakedAnimRoot::new(self.anim)
+    }
+}
+
 impl Deref for SceneRoot {
     type Target = Scene;
     fn deref(&self) -> &Self::Target {
@@ -188,6 +215,13 @@ impl Deref for AnimRoot {
     }
 }
 
+impl Deref for BakedAnimRoot {
+    type Target = BakedAnim;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.anim }
+    }
+}
+
 unsafe impl Send for SceneRoot {}
 unsafe impl Sync for SceneRoot {}
 
@@ -202,6 +236,9 @@ unsafe impl Sync for GeometryCacheRoot {}
 
 unsafe impl Send for AnimRoot {}
 unsafe impl Sync for AnimRoot {}
+
+unsafe impl Send for BakedAnimRoot {}
+unsafe impl Sync for BakedAnimRoot {}
 
 """.strip()
 
@@ -219,6 +256,7 @@ alloc_types = {
     "line": "LineCurveRoot",
     "geometryCache": "GeometryCacheRoot",
     "anim": "AnimRoot",
+    "bakedAnim": "BakedAnimRoot",
 }
 
 raw_types = {
@@ -243,9 +281,11 @@ primitive_types = {
     "float": "f32",
     "double": "f64",
     "size_t": "usize",
+    "uintptr_t": "usize",
     "ptrdiff_t": "isize",
     "bool": "bool",
     "ufbx_real": "Real",
+    "ufbx_thread_pool_context": "ThreadPoolContext",
 }
 
 default_derive_types = {
@@ -301,6 +341,32 @@ override_functions["ufbx_find_shader_prop_len"] = """
 pub fn find_shader_prop<'a>(shader: &'a Shader, name: &'a str) -> &'a str {
     let result = unsafe { ufbx_find_shader_prop_len(shader as *const Shader, name.as_ptr(), name.len()) };
     unsafe { result.as_static_ref() }
+}
+"""
+
+override_functions["ufbx_thread_pool_set_user_ptr"] = """
+pub unsafe fn thread_pool_set_user_ptr(ctx: ThreadPoolContext, user_ptr: *mut c_void) {
+    ufbx_thread_pool_set_user_ptr(ctx, user_ptr as *mut c_void)
+}
+"""
+
+override_functions["ufbx_thread_pool_get_user_ptr"] = """
+pub unsafe fn thread_pool_get_user_ptr(ctx: ThreadPoolContext) -> *mut c_void {
+    ufbx_thread_pool_get_user_ptr(ctx)
+}
+"""
+
+override_functions["ufbx_evaluate_baked_vec3"] = """
+pub fn evaluate_baked_vec3(keyframes: &[BakedVec3], time: f64) -> Vec3 {
+    let result = unsafe { ufbx_ffi_evaluate_baked_vec3(keyframes.as_ptr(), keyframes.len(), time) };
+    result
+}
+"""
+
+override_functions["ufbx_evaluate_baked_quat"] = """
+pub fn evaluate_baked_quat(keyframes: &[BakedQuat], time: f64) -> Quat {
+    let result = unsafe { ufbx_ffi_evaluate_baked_quat(keyframes.as_ptr(), keyframes.len(), time) };
+    result
 }
 """
 
@@ -1240,7 +1306,6 @@ def fmt_ffi_arg(arg: ir.Argument, lifetime: str):
 def emit_ffi_function(fn: ir.Function):
     if fn.is_inline: return
 
-    ret = types[fn.return_type]
     needs_ref = False
 
     lt = "<'a>" if needs_ref else ""
@@ -1332,7 +1397,11 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
         emit(f"pub unsafe fn {rf.name}_raw{lt}({arg_str}){ret} {{")
         is_unsafe = True
     else:
-        emit(f"pub fn {rf.name}{lt}({arg_str}){ret} {{")
+        unsafe_fn = ""
+        if rf.ir.is_unsafe:
+            unsafe_fn = "unsafe "
+            is_unsafe = True
+        emit(f"pub {unsafe_fn}fn {rf.name}{lt}({arg_str}){ret} {{")
     indent()
 
     unsafe = "" if is_unsafe else "unsafe "
