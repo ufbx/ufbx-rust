@@ -162,3 +162,21 @@ fn tessellate_saddle() {
     assert_eq!(mesh.num_faces, obj_mesh.num_faces);
     common::check_mesh_positions(node, &mesh, &obj_mesh);
 }
+
+#[test]
+fn instanced_materials() {
+    let scene = ufbx::load_file("tests/data/instanced_materials.fbx", ufbx::LoadOpts::default())
+        .expect("expected to load scene");
+
+    let bottom = scene.find_node("ConeBottom").expect("expected to find ConeBottom");
+    let top = scene.find_node("ConeTop").expect("expected to find ConeTop");
+    let mesh = bottom.mesh.as_ref().expect("expected ConeBottom to have mesh").as_ref();
+    let top_mesh = top.mesh.as_ref().expect("expected ConeTop to have mesh").as_ref();
+    assert!(mesh.element.element_id == top_mesh.element.element_id);
+    assert!(std::ptr::eq(mesh, top_mesh));
+
+    assert!(mesh.materials.count == 2);
+    assert!(mesh.material_parts.count == 2);
+
+    // TODO: Check materials
+}
