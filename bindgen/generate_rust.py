@@ -1139,7 +1139,7 @@ def emit_input_struct(rs: RustStruct):
     for mut in ("", "mut "):
         mut_us = "_mut" if mut  else ""
         emit(f"#[allow(unused, unused_variables, dead_code)]")
-        emit(f"#[cfg_attr(feature=\"nightly\", no_coverage)]")
+        emit(f"#[cfg_attr(feature=\"nightly\", coverage(off))]")
         emit(f"fn from_rust{mut_us}(&{mut}self, arena: &mut Arena) -> Self::Result {{")
         indent()
         emit(f"{rs.name} {{")

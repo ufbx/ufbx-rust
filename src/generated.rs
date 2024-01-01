@@ -2873,7 +2873,7 @@ pub struct AllocatorOpts {
 impl FromRust for AllocatorOpts {
     type Result = RawAllocatorOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawAllocatorOpts {
             allocator: self.allocator.from_rust(),
@@ -2884,7 +2884,7 @@ impl FromRust for AllocatorOpts {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawAllocatorOpts {
             allocator: self.allocator.from_rust_mut(),
@@ -2984,7 +2984,7 @@ pub struct OpenMemoryOpts<'a> {
 impl<'a> FromRust for OpenMemoryOpts<'a> {
     type Result = RawOpenMemoryOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawOpenMemoryOpts {
             _begin_zero: 0,
@@ -2995,7 +2995,7 @@ impl<'a> FromRust for OpenMemoryOpts<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawOpenMemoryOpts {
             _begin_zero: 0,
@@ -3056,7 +3056,7 @@ pub struct ThreadOpts {
 impl FromRust for ThreadOpts {
     type Result = RawThreadOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawThreadOpts {
             pool: self.pool.from_rust(),
@@ -3065,7 +3065,7 @@ impl FromRust for ThreadOpts {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawThreadOpts {
             pool: self.pool.from_rust_mut(),
@@ -3144,7 +3144,7 @@ pub struct LoadOpts<'a> {
 impl<'a> FromRust for LoadOpts<'a> {
     type Result = RawLoadOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawLoadOpts {
             _begin_zero: 0,
@@ -3214,7 +3214,7 @@ impl<'a> FromRust for LoadOpts<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawLoadOpts {
             _begin_zero: 0,
@@ -3298,7 +3298,7 @@ pub struct EvaluateOpts<'a> {
 impl<'a> FromRust for EvaluateOpts<'a> {
     type Result = RawEvaluateOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawEvaluateOpts {
             _begin_zero: 0,
@@ -3312,7 +3312,7 @@ impl<'a> FromRust for EvaluateOpts<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawEvaluateOpts {
             _begin_zero: 0,
@@ -3339,7 +3339,7 @@ pub struct PropOverrideDesc<'a> {
 impl<'a> FromRust for PropOverrideDesc<'a> {
     type Result = RawPropOverrideDesc;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawPropOverrideDesc {
             element_id: self.element_id,
@@ -3350,7 +3350,7 @@ impl<'a> FromRust for PropOverrideDesc<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawPropOverrideDesc {
             element_id: self.element_id,
@@ -3375,7 +3375,7 @@ pub struct AnimOpts<'a> {
 impl<'a> FromRust for AnimOpts<'a> {
     type Result = RawAnimOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawAnimOpts {
             _begin_zero: 0,
@@ -3389,7 +3389,7 @@ impl<'a> FromRust for AnimOpts<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawAnimOpts {
             _begin_zero: 0,
@@ -3427,7 +3427,7 @@ pub struct BakeOpts {
 impl FromRust for BakeOpts {
     type Result = RawBakeOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawBakeOpts {
             _begin_zero: 0,
@@ -3451,7 +3451,7 @@ impl FromRust for BakeOpts {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawBakeOpts {
             _begin_zero: 0,
@@ -3486,7 +3486,7 @@ pub struct TessellateCurveOpts {
 impl FromRust for TessellateCurveOpts {
     type Result = RawTessellateCurveOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawTessellateCurveOpts {
             _begin_zero: 0,
@@ -3497,7 +3497,7 @@ impl FromRust for TessellateCurveOpts {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawTessellateCurveOpts {
             _begin_zero: 0,
@@ -3521,7 +3521,7 @@ pub struct TessellateSurfaceOpts {
 impl FromRust for TessellateSurfaceOpts {
     type Result = RawTessellateSurfaceOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawTessellateSurfaceOpts {
             _begin_zero: 0,
@@ -3534,7 +3534,7 @@ impl FromRust for TessellateSurfaceOpts {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawTessellateSurfaceOpts {
             _begin_zero: 0,
@@ -3567,7 +3567,7 @@ pub struct SubdivideOpts {
 impl FromRust for SubdivideOpts {
     type Result = RawSubdivideOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawSubdivideOpts {
             _begin_zero: 0,
@@ -3587,7 +3587,7 @@ impl FromRust for SubdivideOpts {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawSubdivideOpts {
             _begin_zero: 0,
@@ -3622,7 +3622,7 @@ pub struct GeometryCacheOpts<'a> {
 impl<'a> FromRust for GeometryCacheOpts<'a> {
     type Result = RawGeometryCacheOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawGeometryCacheOpts {
             _begin_zero: 0,
@@ -3637,7 +3637,7 @@ impl<'a> FromRust for GeometryCacheOpts<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawGeometryCacheOpts {
             _begin_zero: 0,
@@ -3665,7 +3665,7 @@ pub struct GeometryCacheDataOpts<'a> {
 impl<'a> FromRust for GeometryCacheDataOpts<'a> {
     type Result = RawGeometryCacheDataOpts;
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust(&self, arena: &mut Arena) -> Self::Result {
         RawGeometryCacheDataOpts {
             _begin_zero: 0,
@@ -3678,7 +3678,7 @@ impl<'a> FromRust for GeometryCacheDataOpts<'a> {
         }
     }
     #[allow(unused, unused_variables, dead_code)]
-    #[cfg_attr(feature="nightly", no_coverage)]
+    #[cfg_attr(feature="nightly", coverage(off))]
     fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
         RawGeometryCacheDataOpts {
             _begin_zero: 0,
