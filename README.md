@@ -1,3 +1,3 @@
 # UFBX
 
-Bindings for https://github.com/bqqbarbhg/ufbx, heaviy in progress but functional!
+Bindings for https://github.com/ufbx/ufbx, heaviy in progress but functional!
