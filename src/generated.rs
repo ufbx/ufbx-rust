@@ -398,6 +398,7 @@ pub struct Node {
     pub geometry_to_node: Matrix,
     pub geometry_to_world: Matrix,
     pub unscaled_node_to_world: Matrix,
+    pub adjust_pre_translation: Vec3,
     pub adjust_pre_rotation: Quat,
     pub adjust_pre_scale: Real,
     pub adjust_post_rotation: Quat,
@@ -405,6 +406,7 @@ pub struct Node {
     pub adjust_translation_scale: Real,
     pub adjust_mirror_axis: MirrorAxis,
     pub materials: RefList<Material>,
+    pub bind_pose: Option<Ref<Pose>>,
     pub visible: bool,
     pub is_root: bool,
     pub has_geometry_transform: bool,
@@ -1865,6 +1867,7 @@ pub struct Constraint {
 pub struct BonePose {
     pub bone_node: Ref<Node>,
     pub bone_to_world: Matrix,
+    pub bone_to_parent: Matrix,
 }
 
 #[repr(C)]
@@ -2361,24 +2364,26 @@ pub enum ErrorType {
     None = 0,
     Unknown = 1,
     FileNotFound = 2,
-    ExternalFileNotFound = 3,
-    OutOfMemory = 4,
-    MemoryLimit = 5,
-    AllocationLimit = 6,
-    TruncatedFile = 7,
-    Io = 8,
-    Cancelled = 9,
-    UnrecognizedFileFormat = 10,
-    UninitializedOptions = 11,
-    ZeroVertexSize = 12,
-    TruncatedVertexStream = 13,
-    InvalidUtf8 = 14,
-    FeatureDisabled = 15,
-    BadNurbs = 16,
-    BadIndex = 17,
-    ThreadedAsciiParse = 18,
-    UnsafeOptions = 19,
-    DuplicateOverride = 20,
+    EmptyFile = 3,
+    ExternalFileNotFound = 4,
+    OutOfMemory = 5,
+    MemoryLimit = 6,
+    AllocationLimit = 7,
+    TruncatedFile = 8,
+    Io = 9,
+    Cancelled = 10,
+    UnrecognizedFileFormat = 11,
+    UninitializedOptions = 12,
+    ZeroVertexSize = 13,
+    TruncatedVertexStream = 14,
+    InvalidUtf8 = 15,
+    FeatureDisabled = 16,
+    BadNurbs = 17,
+    BadIndex = 18,
+    NodeDepthLimit = 19,
+    ThreadedAsciiParse = 20,
+    UnsafeOptions = 21,
+    DuplicateOverride = 22,
 }
 
 impl Default for ErrorType {
@@ -2515,6 +2520,17 @@ impl Default for InheritModeHandling {
     fn default() -> Self { Self::Preserve }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PivotHandling {
+    Retain = 0,
+    AdjustToPivot = 1,
+}
+
+impl Default for PivotHandling {
+    fn default() -> Self { Self::Retain }
+}
+
 #[repr(C)]
 pub struct BakedVec3 {
     pub time: f64,
@@ -2622,6 +2638,7 @@ pub struct RawLoadOpts {
     pub generate_missing_normals: bool,
     pub open_main_file_with_default: bool,
     pub path_separator: u8,
+    pub node_depth_limit: u32,
     pub file_size_estimate: u64,
     pub read_buffer_size: usize,
     pub filename: RawString,
@@ -2631,6 +2648,7 @@ pub struct RawLoadOpts {
     pub open_file_cb: RawOpenFileCb,
     pub geometry_transform_handling: GeometryTransformHandling,
     pub inherit_mode_handling: InheritModeHandling,
+    pub pivot_handling: PivotHandling,
     pub space_conversion: SpaceConversion,
     pub handedness_conversion_axis: MirrorAxis,
     pub handedness_conversion_retain_winding: bool,
@@ -2706,6 +2724,7 @@ pub struct RawBakeOpts {
     pub time_start_offset: f64,
     pub resample_rate: f64,
     pub minimum_sample_rate: f64,
+    pub maximum_sample_rate: f64,
     pub bake_transform_props: bool,
     pub skip_node_transforms: bool,
     pub no_resample_rotation: bool,
@@ -3097,6 +3116,7 @@ pub struct LoadOpts<'a> {
     pub generate_missing_normals: bool,
     pub open_main_file_with_default: bool,
     pub path_separator: u8,
+    pub node_depth_limit: u32,
     pub file_size_estimate: u64,
     pub read_buffer_size: usize,
     pub filename: StringOpt<'a>,
@@ -3106,6 +3126,7 @@ pub struct LoadOpts<'a> {
     pub open_file_cb: OpenFileCb<'a>,
     pub geometry_transform_handling: GeometryTransformHandling,
     pub inherit_mode_handling: InheritModeHandling,
+    pub pivot_handling: PivotHandling,
     pub space_conversion: SpaceConversion,
     pub handedness_conversion_axis: MirrorAxis,
     pub handedness_conversion_retain_winding: bool,
@@ -3167,6 +3188,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             generate_missing_normals: self.generate_missing_normals,
             open_main_file_with_default: self.open_main_file_with_default,
             path_separator: self.path_separator,
+            node_depth_limit: self.node_depth_limit,
             file_size_estimate: self.file_size_estimate,
             read_buffer_size: self.read_buffer_size,
             filename: self.filename.from_rust(arena),
@@ -3176,6 +3198,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             open_file_cb: self.open_file_cb.from_rust(),
             geometry_transform_handling: self.geometry_transform_handling,
             inherit_mode_handling: self.inherit_mode_handling,
+            pivot_handling: self.pivot_handling,
             space_conversion: self.space_conversion,
             handedness_conversion_axis: self.handedness_conversion_axis,
             handedness_conversion_retain_winding: self.handedness_conversion_retain_winding,
@@ -3236,6 +3259,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             generate_missing_normals: self.generate_missing_normals,
             open_main_file_with_default: self.open_main_file_with_default,
             path_separator: self.path_separator,
+            node_depth_limit: self.node_depth_limit,
             file_size_estimate: self.file_size_estimate,
             read_buffer_size: self.read_buffer_size,
             filename: self.filename.from_rust_mut(arena),
@@ -3245,6 +3269,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             open_file_cb: self.open_file_cb.from_rust_mut(),
             geometry_transform_handling: self.geometry_transform_handling,
             inherit_mode_handling: self.inherit_mode_handling,
+            pivot_handling: self.pivot_handling,
             space_conversion: self.space_conversion,
             handedness_conversion_axis: self.handedness_conversion_axis,
             handedness_conversion_retain_winding: self.handedness_conversion_retain_winding,
@@ -3397,6 +3422,7 @@ pub struct BakeOpts {
     pub time_start_offset: f64,
     pub resample_rate: f64,
     pub minimum_sample_rate: f64,
+    pub maximum_sample_rate: f64,
     pub bake_transform_props: bool,
     pub skip_node_transforms: bool,
     pub no_resample_rotation: bool,
@@ -3421,6 +3447,7 @@ impl FromRust for BakeOpts {
             time_start_offset: self.time_start_offset,
             resample_rate: self.resample_rate,
             minimum_sample_rate: self.minimum_sample_rate,
+            maximum_sample_rate: self.maximum_sample_rate,
             bake_transform_props: self.bake_transform_props,
             skip_node_transforms: self.skip_node_transforms,
             no_resample_rotation: self.no_resample_rotation,
@@ -3444,6 +3471,7 @@ impl FromRust for BakeOpts {
             time_start_offset: self.time_start_offset,
             resample_rate: self.resample_rate,
             minimum_sample_rate: self.minimum_sample_rate,
+            maximum_sample_rate: self.maximum_sample_rate,
             bake_transform_props: self.bake_transform_props,
             skip_node_transforms: self.skip_node_transforms,
             no_resample_rotation: self.no_resample_rotation,
@@ -3733,6 +3761,7 @@ extern "C" {
     pub fn ufbx_free_baked_anim(bake: *mut BakedAnim);
     pub fn ufbx_evaluate_baked_vec3(keyframes: List<BakedVec3>, time: f64) -> Vec3;
     pub fn ufbx_evaluate_baked_quat(keyframes: List<BakedQuat>, time: f64) -> Quat;
+    pub fn ufbx_get_bone_pose(pose: *const Pose, node: *const Node) -> *mut BonePose;
     pub fn ufbx_find_prop_texture_len(material: *const Material, name: *const u8, name_len: usize) -> *mut Texture;
     pub fn ufbx_find_shader_prop_len(shader: *const Shader, name: *const u8, name_len: usize) -> String;
     pub fn ufbx_find_shader_prop_bindings_len(shader: *const Shader, name: *const u8, name_len: usize) -> List<ShaderPropBinding>;
@@ -4403,6 +4432,11 @@ pub fn evaluate_baked_vec3(keyframes: &[BakedVec3], time: f64) -> Vec3 {
 pub fn evaluate_baked_quat(keyframes: &[BakedQuat], time: f64) -> Quat {
     let result = unsafe { ufbx_ffi_evaluate_baked_quat(keyframes.as_ptr(), keyframes.len(), time) };
     result
+}
+
+pub fn get_bone_pose<'a>(pose: &'a Pose, node: &'a Node) -> Option<&'a BonePose> {
+    let result = unsafe { ufbx_get_bone_pose(pose as *const Pose, node as *const Node) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
 pub fn find_prop_texture<'a>(material: &'a Material, name: &str) -> Option<&'a Texture> {

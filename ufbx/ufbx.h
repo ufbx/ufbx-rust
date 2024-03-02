@@ -95,11 +95,11 @@
 #endif
 
 #ifndef ufbx_assert
-	#if !defined(UFBX_NO_ASSERT)
+	#if defined(UFBX_NO_ASSERT)
+		#define ufbx_assert(cond) (void)0
+	#else
 		#include <assert.h>
 		#define ufbx_assert(cond) assert(cond)
-	#else
-		#define ufbx_assert(cond) (void)0
 	#endif
 #endif
 
@@ -219,7 +219,7 @@ struct ufbx_converter { };
 #define ufbx_version_minor(version) ((uint32_t)(version)/1000u%1000u)
 #define ufbx_version_patch(version) ((uint32_t)(version)%1000u)
 
-#define UFBX_HEADER_VERSION ufbx_pack_version(0, 8, 0)
+#define UFBX_HEADER_VERSION ufbx_pack_version(0, 11, 1)
 #define UFBX_VERSION UFBX_HEADER_VERSION
 
 // -- Basic types
@@ -871,6 +871,7 @@ struct ufbx_node {
 	// ufbx-specific adjustment for switching between coodrinate/unit systems.
 	// HINT: In most cases you don't need to deal with these as these are baked
 	// into all the transforms above and into `ufbx_evaluate_transform()`.
+	ufbx_vec3 adjust_pre_translation;    // < Translation applied between parent and self
 	ufbx_quat adjust_pre_rotation;       // < Rotation applied between parent and self
 	ufbx_real adjust_pre_scale;          // < Scaling applied between parent and self
 	ufbx_quat adjust_post_rotation;      // < Rotation applied in local space at the end
@@ -882,6 +883,9 @@ struct ufbx_node {
 	// There may be multiple copies of a single `ufbx_mesh` with different materials
 	// in the `ufbx_node` instances.
 	ufbx_material_list materials;
+
+	// Bind pose
+	ufbx_nullable ufbx_pose *bind_pose;
 
 	// Visibility state.
 	bool visible;
@@ -1928,7 +1932,6 @@ struct ufbx_skin_cluster {
 
 	// Matrix that specifies the rest/bind pose transform of the node,
 	// not generally needed for skinning, use `geometry_to_bone` instead.
-	// NOTE: This does not account for unit scaling!
 	ufbx_matrix bind_to_world;
 
 	// Precomputed matrix/transform that accounts for the current bone transform
@@ -2151,11 +2154,24 @@ struct ufbx_cache_file {
 		uint32_t typed_id;
 	}; };
 
+	// Filename relative to the currently loaded file.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_string filename;
+	// Absolute filename specified in the file.
 	ufbx_string absolute_filename;
+	// Relative filename specified in the file.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_string relative_filename;
+
+	// Filename relative to the loaded file, non-UTF-8 encoded.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_blob raw_filename;
+	// Absolute filename specified in the file, non-UTF-8 encoded.
 	ufbx_blob raw_absolute_filename;
+	// Relative filename specified in the file, non-UTF-8 encoded.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_blob raw_relative_filename;
 
 	ufbx_cache_file_format format;
@@ -2726,11 +2742,25 @@ typedef struct ufbx_texture_file {
 	uint32_t index;
 
 	// Paths to the resource.
+
+	// Filename relative to the currently loaded file.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_string filename;
+	// Absolute filename specified in the file.
 	ufbx_string absolute_filename;
+	// Relative filename specified in the file.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_string relative_filename;
+
+	// Filename relative to the loaded file, non-UTF-8 encoded.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_blob raw_filename;
+	// Absolute filename specified in the file, non-UTF-8 encoded.
 	ufbx_blob raw_absolute_filename;
+	// Relative filename specified in the file, non-UTF-8 encoded.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_blob raw_relative_filename;
 
 	// Optional embedded content blob, eg. raw .png format data
@@ -2753,11 +2783,25 @@ struct ufbx_texture {
 	ufbx_texture_type type;
 
 	// FILE: Paths to the resource
+
+	// Filename relative to the currently loaded file.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_string filename;
+	// Absolute filename specified in the file.
 	ufbx_string absolute_filename;
+	// Relative filename specified in the file.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_string relative_filename;
+
+	// Filename relative to the loaded file, non-UTF-8 encoded.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_blob raw_filename;
+	// Absolute filename specified in the file, non-UTF-8 encoded.
 	ufbx_blob raw_absolute_filename;
+	// Relative filename specified in the file, non-UTF-8 encoded.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_blob raw_relative_filename;
 
 	// FILE: Optional embedded content blob, eg. raw .png format data
@@ -2808,11 +2852,25 @@ struct ufbx_video {
 	}; };
 
 	// Paths to the resource
+
+	// Filename relative to the currently loaded file.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_string filename;
+	// Absolute filename specified in the file.
 	ufbx_string absolute_filename;
+	// Relative filename specified in the file.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_string relative_filename;
+
+	// Filename relative to the loaded file, non-UTF-8 encoded.
+	// HINT: If using functions other than `ufbx_load_file()`, you can provide
+	// `ufbx_load_opts.filename/raw_filename` to let ufbx resolve this.
 	ufbx_blob raw_filename;
+	// Absolute filename specified in the file, non-UTF-8 encoded.
 	ufbx_blob raw_absolute_filename;
+	// Relative filename specified in the file, non-UTF-8 encoded.
+	// NOTE: May be absolute if the file is saved in a different drive.
 	ufbx_blob raw_relative_filename;
 
 	// Optional embedded content blob
@@ -3191,9 +3249,18 @@ struct ufbx_constraint {
 // -- Miscellaneous
 
 typedef struct ufbx_bone_pose {
+
+	// Node to apply the pose to.
 	ufbx_node *bone_node;
-	// NOTE: This does not account for unit scaling!
+
+	// Matrix from node local space to world space.
 	ufbx_matrix bone_to_world;
+
+	// Matrix from node local space to parent space.
+	// NOTE: FBX only stores world transformations so this is approximated from
+	// the parent world transform.
+	ufbx_matrix bone_to_parent;
+
 } ufbx_bone_pose;
 
 UFBX_LIST_TYPE(ufbx_bone_pose_list, ufbx_bone_pose);
@@ -3206,7 +3273,11 @@ struct ufbx_pose {
 		uint32_t typed_id;
 	}; };
 
+	// Set if this pose is marked as a bind pose.
 	bool is_bind_pose;
+
+	// List of bone poses.
+	// Sorted by `ufbx_node.typed_id`.
 	ufbx_bone_pose_list bone_poses;
 };
 
@@ -3853,6 +3924,9 @@ typedef enum ufbx_error_type UFBX_ENUM_REPR {
 	// File not found.
 	UFBX_ERROR_FILE_NOT_FOUND,
 
+	// Empty file.
+	UFBX_ERROR_EMPTY_FILE,
+
 	// External file not found.
 	// See `ufbx_load_opts.load_external_files` for more information.
 	UFBX_ERROR_EXTERNAL_FILE_NOT_FOUND,
@@ -3905,6 +3979,9 @@ typedef enum ufbx_error_type UFBX_ENUM_REPR {
 
 	// Out of bounds index in the file when loading with `UFBX_INDEX_ERROR_HANDLING_ABORT_LOADING`.
 	UFBX_ERROR_BAD_INDEX,
+
+	// Node is deeper than `ufbx_load_opts.node_depth_limit` in the hierarchy.
+	UFBX_ERROR_NODE_DEPTH_LIMIT,
 
 	// Error parsing ASCII array in a thread.
 	// Threaded ASCII parsing is slightly more strict than non-threaded, for cursed files,
@@ -4113,6 +4190,23 @@ typedef enum ufbx_inherit_mode_handling UFBX_ENUM_REPR {
 
 UFBX_ENUM_TYPE(ufbx_inherit_mode_handling, UFBX_INHERIT_MODE_HANDLING, UFBX_INHERIT_MODE_HANDLING_IGNORE);
 
+// How to handle FBX transform pivots.
+typedef enum ufbx_pivot_handling UFBX_ENUM_REPR {
+
+	// Take pivots into account when computing the transform.
+	UFBX_PIVOT_HANDLING_RETAIN,
+
+	// Translate objects to be located at their pivot.
+	// NOTE: Only applied if rotation and scaling pivots are equal.
+	// NOTE: Results in geometric translation. Use `ufbx_geometry_transform_handling`
+	// to interpret these in a standard scene graph.
+	UFBX_PIVOT_HANDLING_ADJUST_TO_PIVOT,
+
+	UFBX_ENUM_FORCE_WIDTH(UFBX_PIVOT_HANDLING)
+} ufbx_pivot_handling;
+
+UFBX_ENUM_TYPE(ufbx_pivot_handling, UFBX_PIVOT_HANDLING, UFBX_PIVOT_HANDLING_ADJUST_TO_PIVOT);
+
 typedef struct ufbx_baked_vec3 {
 	double time;
 	ufbx_vec3 value;
@@ -4229,7 +4323,7 @@ typedef struct ufbx_load_opts {
 	// a bit of memory and time if not needed
 	bool skip_skin_vertices;
 
-	// Skip computing `ufbx_mesh.material_parts[]` and `ufbx_mesh.group_parts[]`.
+	// Skip computing `ufbx_mesh.material_parts[]` and `ufbx_mesh.face_group_parts[]`.
 	bool skip_mesh_parts;
 
 	// Clean-up skin weights by removing negative, zero and NAN weights.
@@ -4279,6 +4373,12 @@ typedef struct ufbx_load_opts {
 	// Path separator character, defaults to '\' on Windows and '/' otherwise.
 	char path_separator;
 
+	// Maximum depth of the node hirerachy.
+	// Will fail with `UFBX_ERROR_NODE_DEPTH_LIMIT` if a node is deeper than this limit.
+	// NOTE: The default of 0 allows arbitrarily deep hierarchies. Be careful if using
+	// recursive algorithms without setting this limit.
+	uint32_t node_depth_limit;
+
 	// Estimated file size for progress reporting
 	uint64_t file_size_estimate;
 
@@ -4308,6 +4408,10 @@ typedef struct ufbx_load_opts {
 	// How to handle unconventional transform inherit modes.
 	// See `ufbx_inherit_mode_handling` for an explanation.
 	ufbx_inherit_mode_handling inherit_mode_handling;
+
+	// How to handle pivots.
+	// See `ufbx_pivot_handling` for an explanation.
+	ufbx_pivot_handling pivot_handling;
 
 	// How to perform space conversion by `target_axes` and `target_unit_meters`.
 	// See `ufbx_space_conversion` for an explanation.
@@ -4495,6 +4599,10 @@ typedef struct ufbx_bake_opts {
 	// Default: 19.5
 	double minimum_sample_rate;
 
+	// Maximum sample rate to use, this will remove keys if they are too close together.
+	// Default: unlimited
+	double maximum_sample_rate;
+
 	// Bake the raw versions of properties related to transforms.
 	bool bake_transform_props;
 
@@ -4532,7 +4640,7 @@ typedef struct ufbx_bake_opts {
 	// Default: `4`
 	size_t key_reduction_passes;
 
-	// Compensate for `UFBX_INHERIT_NO_SCALE` by adjusting child scale.
+	// Compensate for `UFBX_INHERIT_MODE_IGNORE_PARENT_SCALE` by adjusting child scale.
 	// NOTE: This is an lossy operation, and properly works only for uniform scaling.
 	bool compensate_inherit_no_scale;
 
@@ -4914,6 +5022,10 @@ ufbx_abi void ufbx_free_baked_anim(ufbx_baked_anim *bake);
 ufbx_abi ufbx_vec3 ufbx_evaluate_baked_vec3(ufbx_baked_vec3_list keyframes, double time);
 ufbx_abi ufbx_quat ufbx_evaluate_baked_quat(ufbx_baked_quat_list keyframes, double time);
 
+// Poses
+
+ufbx_abi ufbx_bone_pose *ufbx_get_bone_pose(const ufbx_pose *pose, const ufbx_node *node);
+
 // Materials
 
 ufbx_abi ufbx_texture *ufbx_find_prop_texture_len(const ufbx_material *material, const char *name, size_t name_len);
@@ -5073,7 +5185,6 @@ ufbx_unsafe ufbx_abi void ufbx_thread_pool_run_task(ufbx_thread_pool_context ctx
 
 ufbx_unsafe ufbx_abi void ufbx_thread_pool_set_user_ptr(ufbx_thread_pool_context ctx, void *user_ptr);
 ufbx_unsafe ufbx_abi void *ufbx_thread_pool_get_user_ptr(ufbx_thread_pool_context ctx);
-
 
 // -- Inline API
 
