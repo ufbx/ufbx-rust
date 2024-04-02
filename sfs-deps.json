@@ -8,7 +8,7 @@
         {
             "name": "ufbx",
             "url": "https://github.com/ufbx/ufbx",
-            "branch": "master",
+            "branch": "integration",
             "files": [
                 {
                     "root": "ufbx",

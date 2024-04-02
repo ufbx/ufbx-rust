@@ -309,8 +309,10 @@ pub enum ElementType {
     SelectionNode = 35,
     Character = 36,
     Constraint = 37,
-    Pose = 38,
-    MetadataObject = 39,
+    AudioLayer = 38,
+    AudioClip = 39,
+    Pose = 40,
+    MetadataObject = 41,
 }
 
 impl Default for ElementType {
@@ -1864,6 +1866,24 @@ pub struct Constraint {
 }
 
 #[repr(C)]
+pub struct AudioLayer {
+    pub element: Element,
+    pub clips: RefList<AudioClip>,
+}
+
+#[repr(C)]
+pub struct AudioClip {
+    pub element: Element,
+    pub filename: String,
+    pub absolute_filename: String,
+    pub relative_filename: String,
+    pub raw_filename: Blob,
+    pub raw_absolute_filename: Blob,
+    pub raw_relative_filename: Blob,
+    pub content: Blob,
+}
+
+#[repr(C)]
 pub struct BonePose {
     pub bone_node: Ref<Node>,
     pub bone_to_world: Matrix,
@@ -2142,6 +2162,8 @@ pub struct Scene {
     pub selection_nodes: RefList<SelectionNode>,
     pub characters: RefList<Character>,
     pub constraints: RefList<Constraint>,
+    pub audio_layers: RefList<AudioLayer>,
+    pub audio_clips: RefList<AudioClip>,
     pub poses: RefList<Pose>,
     pub metadata_objects: RefList<MetadataObject>,
     pub texture_files: List<TextureFile>,
@@ -2531,16 +2553,73 @@ impl Default for PivotHandling {
     fn default() -> Self { Self::Retain }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct BakedKeyFlags(u32);
+impl BakedKeyFlags {
+    pub const NONE: BakedKeyFlags = BakedKeyFlags(0);
+    pub const STEP_LEFT: BakedKeyFlags = BakedKeyFlags(0x1);
+    pub const STEP_RIGHT: BakedKeyFlags = BakedKeyFlags(0x2);
+    pub const STEP_KEY: BakedKeyFlags = BakedKeyFlags(0x4);
+    pub const KEYFRAME: BakedKeyFlags = BakedKeyFlags(0x8);
+    pub const REDUCED: BakedKeyFlags = BakedKeyFlags(0x10);
+}
+
+const BAKEDKEYFLAGS_NAMES: [(&'static str, u32); 5] = [
+    ("STEP_LEFT", 0x1),
+    ("STEP_RIGHT", 0x2),
+    ("STEP_KEY", 0x4),
+    ("KEYFRAME", 0x8),
+    ("REDUCED", 0x10),
+];
+
+impl BakedKeyFlags {
+    pub fn any(self) -> bool { self.0 != 0 }
+    pub fn has_any(self, bits: Self) -> bool { (self.0 & bits.0) != 0 }
+    pub fn has_all(self, bits: Self) -> bool { (self.0 & bits.0) == bits.0 }
+}
+impl Default for BakedKeyFlags {
+    fn default() -> Self { Self(0) }
+}
+impl Debug for BakedKeyFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_flags(f, &BAKEDKEYFLAGS_NAMES, self.0)
+    }
+}
+impl BitAnd for BakedKeyFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output { Self(self.0 & rhs.0) }
+}
+impl BitAndAssign for BakedKeyFlags {
+    fn bitand_assign(&mut self, rhs: Self) { *self = Self(self.0 & rhs.0) }
+}
+impl BitOr for BakedKeyFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output { Self(self.0 | rhs.0) }
+}
+impl BitOrAssign for BakedKeyFlags {
+    fn bitor_assign(&mut self, rhs: Self) { *self = Self(self.0 | rhs.0) }
+}
+impl BitXor for BakedKeyFlags {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output { Self(self.0 ^ rhs.0) }
+}
+impl BitXorAssign for BakedKeyFlags {
+    fn bitxor_assign(&mut self, rhs: Self) { *self = Self(self.0 ^ rhs.0) }
+}
+
 #[repr(C)]
 pub struct BakedVec3 {
     pub time: f64,
     pub value: Vec3,
+    pub flags: BakedKeyFlags,
 }
 
 #[repr(C)]
 pub struct BakedQuat {
     pub time: f64,
     pub value: Quat,
+    pub flags: BakedKeyFlags,
 }
 
 #[repr(C)]
@@ -2572,6 +2651,11 @@ pub struct BakedElement {
 pub struct BakedAnim {
     pub nodes: List<BakedNode>,
     pub elements: List<BakedElement>,
+    pub playback_time_begin: f64,
+    pub playback_time_end: f64,
+    pub playback_duration: f64,
+    pub key_time_min: f64,
+    pub key_time_max: f64,
 }
 
 #[repr(C)]
@@ -2715,13 +2799,27 @@ pub struct RawAnimOpts {
     pub _end_zero: u32,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BakeStepHandling {
+    Default = 0,
+    CustomDuration = 1,
+    IdenticalTime = 2,
+    AdjacentDouble = 3,
+    Ignore = 4,
+}
+
+impl Default for BakeStepHandling {
+    fn default() -> Self { Self::Default }
+}
+
 #[repr(C)]
 #[derive(Default)]
 pub struct RawBakeOpts {
     pub _begin_zero: u32,
     pub temp_allocator: RawAllocatorOpts,
     pub result_allocator: RawAllocatorOpts,
-    pub time_start_offset: f64,
+    pub trim_start_time: bool,
     pub resample_rate: f64,
     pub minimum_sample_rate: f64,
     pub maximum_sample_rate: f64,
@@ -2730,12 +2828,13 @@ pub struct RawBakeOpts {
     pub no_resample_rotation: bool,
     pub ignore_layer_weight_animation: bool,
     pub max_keyframe_segments: usize,
-    pub constant_timestep: f64,
+    pub step_handling: BakeStepHandling,
+    pub step_custom_duration: f64,
+    pub step_custom_epsilon: f64,
     pub key_reduction_enabled: bool,
     pub key_reduction_rotation: bool,
     pub key_reduction_threshold: f64,
     pub key_reduction_passes: usize,
-    pub compensate_inherit_no_scale: bool,
     pub _end_zero: u32,
 }
 
@@ -3419,7 +3518,7 @@ impl<'a> FromRust for AnimOpts<'a> {
 pub struct BakeOpts {
     pub temp_allocator: AllocatorOpts<>,
     pub result_allocator: AllocatorOpts<>,
-    pub time_start_offset: f64,
+    pub trim_start_time: bool,
     pub resample_rate: f64,
     pub minimum_sample_rate: f64,
     pub maximum_sample_rate: f64,
@@ -3428,12 +3527,13 @@ pub struct BakeOpts {
     pub no_resample_rotation: bool,
     pub ignore_layer_weight_animation: bool,
     pub max_keyframe_segments: usize,
-    pub constant_timestep: f64,
+    pub step_handling: BakeStepHandling,
+    pub step_custom_duration: f64,
+    pub step_custom_epsilon: f64,
     pub key_reduction_enabled: bool,
     pub key_reduction_rotation: bool,
     pub key_reduction_threshold: f64,
     pub key_reduction_passes: usize,
-    pub compensate_inherit_no_scale: bool,
 }
 
 impl FromRust for BakeOpts {
@@ -3444,7 +3544,7 @@ impl FromRust for BakeOpts {
             _begin_zero: 0,
             temp_allocator: self.temp_allocator.from_rust(arena),
             result_allocator: self.result_allocator.from_rust(arena),
-            time_start_offset: self.time_start_offset,
+            trim_start_time: self.trim_start_time,
             resample_rate: self.resample_rate,
             minimum_sample_rate: self.minimum_sample_rate,
             maximum_sample_rate: self.maximum_sample_rate,
@@ -3453,12 +3553,13 @@ impl FromRust for BakeOpts {
             no_resample_rotation: self.no_resample_rotation,
             ignore_layer_weight_animation: self.ignore_layer_weight_animation,
             max_keyframe_segments: self.max_keyframe_segments,
-            constant_timestep: self.constant_timestep,
+            step_handling: self.step_handling,
+            step_custom_duration: self.step_custom_duration,
+            step_custom_epsilon: self.step_custom_epsilon,
             key_reduction_enabled: self.key_reduction_enabled,
             key_reduction_rotation: self.key_reduction_rotation,
             key_reduction_threshold: self.key_reduction_threshold,
             key_reduction_passes: self.key_reduction_passes,
-            compensate_inherit_no_scale: self.compensate_inherit_no_scale,
             _end_zero: 0,
         }
     }
@@ -3468,7 +3569,7 @@ impl FromRust for BakeOpts {
             _begin_zero: 0,
             temp_allocator: self.temp_allocator.from_rust_mut(arena),
             result_allocator: self.result_allocator.from_rust_mut(arena),
-            time_start_offset: self.time_start_offset,
+            trim_start_time: self.trim_start_time,
             resample_rate: self.resample_rate,
             minimum_sample_rate: self.minimum_sample_rate,
             maximum_sample_rate: self.maximum_sample_rate,
@@ -3477,12 +3578,13 @@ impl FromRust for BakeOpts {
             no_resample_rotation: self.no_resample_rotation,
             ignore_layer_weight_animation: self.ignore_layer_weight_animation,
             max_keyframe_segments: self.max_keyframe_segments,
-            constant_timestep: self.constant_timestep,
+            step_handling: self.step_handling,
+            step_custom_duration: self.step_custom_duration,
+            step_custom_epsilon: self.step_custom_epsilon,
             key_reduction_enabled: self.key_reduction_enabled,
             key_reduction_rotation: self.key_reduction_rotation,
             key_reduction_threshold: self.key_reduction_threshold,
             key_reduction_passes: self.key_reduction_passes,
-            compensate_inherit_no_scale: self.compensate_inherit_no_scale,
             _end_zero: 0,
         }
     }
@@ -3754,8 +3856,8 @@ extern "C" {
     pub fn ufbx_evaluate_blend_weight(anim: *const Anim, channel: *const BlendChannel, time: f64) -> Real;
     pub fn ufbx_evaluate_scene(scene: *const Scene, anim: *const Anim, time: f64, opts: *const RawEvaluateOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_create_anim(scene: *const Scene, opts: *const RawAnimOpts, error: *mut Error) -> *mut Anim;
-    pub fn ufbx_retain_anim(anim: *mut Anim);
     pub fn ufbx_free_anim(anim: *mut Anim);
+    pub fn ufbx_retain_anim(anim: *mut Anim);
     pub fn ufbx_bake_anim(scene: *const Scene, anim: *const Anim, opts: *const RawBakeOpts, error: *mut Error) -> *mut BakedAnim;
     pub fn ufbx_retain_baked_anim(bake: *mut BakedAnim);
     pub fn ufbx_free_baked_anim(bake: *mut BakedAnim);
@@ -3814,8 +3916,8 @@ extern "C" {
     pub fn ufbx_free_geometry_cache(cache: *mut GeometryCache);
     pub fn ufbx_retain_geometry_cache(cache: *mut GeometryCache);
     pub fn ufbx_read_geometry_cache_real(frame: *const CacheFrame, data: *mut Real, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
-    pub fn ufbx_sample_geometry_cache_real(channel: *const CacheChannel, time: f64, data: *mut Real, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_read_geometry_cache_vec3(frame: *const CacheFrame, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
+    pub fn ufbx_sample_geometry_cache_real(channel: *const CacheChannel, time: f64, data: *mut Real, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_sample_geometry_cache_vec3(channel: *const CacheChannel, time: f64, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_dom_find_len(parent: *const DomNode, name: *const u8, name_len: usize) -> *mut DomNode;
     pub fn ufbx_generate_indices(streams: *const RawVertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
@@ -3826,7 +3928,6 @@ extern "C" {
     pub fn ufbx_catch_get_vertex_vec2(panic: *mut Panic, v: *const VertexVec2, index: usize) -> Vec2;
     pub fn ufbx_catch_get_vertex_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Vec3;
     pub fn ufbx_catch_get_vertex_vec4(panic: *mut Panic, v: *const VertexVec4, index: usize) -> Vec4;
-    pub fn ufbx_get_triangulate_face_num_indices(face: Face) -> usize;
     pub fn ufbx_as_unknown(element: *const Element) -> *mut Unknown;
     pub fn ufbx_as_node(element: *const Element) -> *mut Node;
     pub fn ufbx_as_mesh(element: *const Element) -> *mut Mesh;
@@ -3865,6 +3966,8 @@ extern "C" {
     pub fn ufbx_as_selection_node(element: *const Element) -> *mut SelectionNode;
     pub fn ufbx_as_character(element: *const Element) -> *mut Character;
     pub fn ufbx_as_constraint(element: *const Element) -> *mut Constraint;
+    pub fn ufbx_as_audio_layer(element: *const Element) -> *mut AudioLayer;
+    pub fn ufbx_as_audio_clip(element: *const Element) -> *mut AudioClip;
     pub fn ufbx_as_pose(element: *const Element) -> *mut Pose;
     pub fn ufbx_as_metadata_object(element: *const Element) -> *mut MetadataObject;
     pub fn ufbx_ffi_find_int_len(retval: *mut i64, props: *const Props, name: *const u8, name_len: usize, def: *const i64);
@@ -3898,7 +4001,6 @@ extern "C" {
     pub fn ufbx_ffi_evaluate_nurbs_curve(retval: *mut CurvePoint, curve: *const NurbsCurve, u: Real);
     pub fn ufbx_ffi_evaluate_nurbs_surface(retval: *mut SurfacePoint, surface: *const NurbsSurface, u: Real, v: Real);
     pub fn ufbx_ffi_get_weighted_face_normal(retval: *mut Vec3, positions: *const VertexVec3, face: *const Face);
-    pub fn ufbx_ffi_get_triangulate_face_num_indices(face: *const Face) -> usize;
     pub fn ufbx_ffi_triangulate_face(indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: *const Face) -> u32;
     pub fn ufbx_ffi_evaluate_baked_vec3(keyframes: *const BakedVec3, num_keyframes: usize, time: f64) -> Vec3;
     pub fn ufbx_ffi_evaluate_baked_quat(keyframes: *const BakedQuat, num_keyframes: usize, time: f64) -> Quat;
@@ -4733,18 +4835,6 @@ pub fn read_geometry_cache_real(frame: &CacheFrame, data: &mut [Real], opts: Geo
     unsafe { read_geometry_cache_real_raw(frame, data, &opts_raw) }
 }
 
-pub unsafe fn sample_geometry_cache_real_raw(channel: &CacheChannel, time: f64, data: &mut [Real], opts: &RawGeometryCacheDataOpts) -> usize {
-    let result = { ufbx_sample_geometry_cache_real(channel as *const CacheChannel, time, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
-    result
-}
-
-pub fn sample_geometry_cache_real(channel: &CacheChannel, time: f64, data: &mut [Real], opts: GeometryCacheDataOpts) -> usize {
-    let mut arena = Arena::new();
-    let mut opts_mut = opts;
-    let opts_raw = opts_mut.from_rust_mut(&mut arena);
-    unsafe { sample_geometry_cache_real_raw(channel, time, data, &opts_raw) }
-}
-
 pub unsafe fn read_geometry_cache_vec3_raw(frame: &CacheFrame, data: &mut [Vec3], opts: &RawGeometryCacheDataOpts) -> usize {
     let result = { ufbx_read_geometry_cache_vec3(frame as *const CacheFrame, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
     result
@@ -4755,6 +4845,18 @@ pub fn read_geometry_cache_vec3(frame: &CacheFrame, data: &mut [Vec3], opts: Geo
     let mut opts_mut = opts;
     let opts_raw = opts_mut.from_rust_mut(&mut arena);
     unsafe { read_geometry_cache_vec3_raw(frame, data, &opts_raw) }
+}
+
+pub unsafe fn sample_geometry_cache_real_raw(channel: &CacheChannel, time: f64, data: &mut [Real], opts: &RawGeometryCacheDataOpts) -> usize {
+    let result = { ufbx_sample_geometry_cache_real(channel as *const CacheChannel, time, data.as_mut_ptr(), data.len(), opts as *const RawGeometryCacheDataOpts) };
+    result
+}
+
+pub fn sample_geometry_cache_real(channel: &CacheChannel, time: f64, data: &mut [Real], opts: GeometryCacheDataOpts) -> usize {
+    let mut arena = Arena::new();
+    let mut opts_mut = opts;
+    let opts_raw = opts_mut.from_rust_mut(&mut arena);
+    unsafe { sample_geometry_cache_real_raw(channel, time, data, &opts_raw) }
 }
 
 pub unsafe fn sample_geometry_cache_vec3_raw(channel: &CacheChannel, time: f64, data: &mut [Vec3], opts: &RawGeometryCacheDataOpts) -> usize {
@@ -4836,11 +4938,6 @@ pub fn get_vertex_vec4(v: &VertexVec4, index: usize) -> Vec4 {
     if panic.did_panic {
         panic!("ufbx::get_vertex_vec4() {}", panic.message());
     }
-    result
-}
-
-pub fn get_triangulate_face_num_indices(face: Face) -> usize {
-    let result = unsafe { ufbx_get_triangulate_face_num_indices(face) };
     result
 }
 
@@ -5031,6 +5128,16 @@ pub fn as_character<'a>(element: &'a Element) -> Option<&'a Character> {
 
 pub fn as_constraint<'a>(element: &'a Element) -> Option<&'a Constraint> {
     let result = unsafe { ufbx_as_constraint(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_audio_layer<'a>(element: &'a Element) -> Option<&'a AudioLayer> {
+    let result = unsafe { ufbx_as_audio_layer(element as *const Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn as_audio_clip<'a>(element: &'a Element) -> Option<&'a AudioClip> {
+    let result = unsafe { ufbx_as_audio_clip(element as *const Element) };
     if result.is_null() { None } else { unsafe { Some(&*result) } }
 }
 
@@ -5324,6 +5431,8 @@ pub enum ElementData<'a> {
     SelectionNode(&'a SelectionNode),
     Character(&'a Character),
     Constraint(&'a Constraint),
+    AudioLayer(&'a AudioLayer),
+    AudioClip(&'a AudioClip),
     Pose(&'a Pose),
     MetadataObject(&'a MetadataObject),
 }
@@ -5370,6 +5479,8 @@ impl Element {
                 ElementType::SelectionNode => ElementData::SelectionNode(&*(self as *const _ as *const SelectionNode)),
                 ElementType::Character => ElementData::Character(&*(self as *const _ as *const Character)),
                 ElementType::Constraint => ElementData::Constraint(&*(self as *const _ as *const Constraint)),
+                ElementType::AudioLayer => ElementData::AudioLayer(&*(self as *const _ as *const AudioLayer)),
+                ElementType::AudioClip => ElementData::AudioClip(&*(self as *const _ as *const AudioClip)),
                 ElementType::Pose => ElementData::Pose(&*(self as *const _ as *const Pose)),
                 ElementType::MetadataObject => ElementData::MetadataObject(&*(self as *const _ as *const MetadataObject)),
             }
