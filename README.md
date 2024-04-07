@@ -1,3 +1,5 @@
-# UFBX
+# ufbx
 
-Bindings for https://github.com/ufbx/ufbx, heaviy in progress but functional!
+Bindings for https://github.com/ufbx/ufbx
+
+[Online documentation](https://ufbx.github.io/), including for Rust.
