@@ -26,6 +26,13 @@ pub struct List<T> {
 }
 
 impl<T> List<T> {
+    pub(crate) unsafe fn from_slice(slice: &[T]) -> List<T> {
+        List {
+            data: slice.as_ptr(),
+            count: slice.len(),
+            _marker: PhantomData,
+        }
+    }
     pub(crate) unsafe fn as_static_ref(&self) -> &'static [T] {
         slice::from_raw_parts(self.data, self.count)
     }

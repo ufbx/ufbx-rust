@@ -427,6 +427,7 @@ pub struct VertexAttrib {
     pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
+    pub values_w: List<Real>,
 }
 
 #[repr(C)]
@@ -436,6 +437,7 @@ pub struct VertexReal {
     pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
+    pub values_w: List<Real>,
 }
 
 impl Index<usize> for VertexReal {
@@ -452,6 +454,7 @@ pub struct VertexVec2 {
     pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
+    pub values_w: List<Real>,
 }
 
 impl Index<usize> for VertexVec2 {
@@ -468,6 +471,7 @@ pub struct VertexVec3 {
     pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
+    pub values_w: List<Real>,
 }
 
 impl Index<usize> for VertexVec3 {
@@ -484,6 +488,7 @@ pub struct VertexVec4 {
     pub indices: List<u32>,
     pub value_reals: usize,
     pub unique_per_vertex: bool,
+    pub values_w: List<Real>,
 }
 
 impl Index<usize> for VertexVec4 {
@@ -1918,7 +1923,6 @@ pub enum Exporter {
     BlenderBinary = 2,
     BlenderAscii = 3,
     MotionBuilder = 4,
-    BcUnityExporter = 5,
 }
 
 impl Default for Exporter {
@@ -1953,12 +1957,13 @@ pub enum WarningType {
     TruncatedArray = 2,
     MissingGeometryData = 3,
     DuplicateConnection = 4,
-    IndexClamped = 5,
-    BadUnicode = 6,
-    BadElementConnectedToRoot = 7,
-    DuplicateObjectId = 8,
-    EmptyFaceRemoved = 9,
-    UnknownObjDirective = 10,
+    BadVertexWAttribute = 5,
+    IndexClamped = 6,
+    BadUnicode = 7,
+    BadElementConnectedToRoot = 8,
+    DuplicateObjectId = 9,
+    EmptyFaceRemoved = 10,
+    UnknownObjDirective = 11,
 }
 
 impl Default for WarningType {
@@ -2016,7 +2021,7 @@ pub struct Metadata {
     pub may_contain_missing_vertex_position: bool,
     pub may_contain_broken_elements: bool,
     pub is_unsafe: bool,
-    pub has_warning: [bool; 11],
+    pub has_warning: [bool; 12],
     pub creator: String,
     pub big_endian: bool,
     pub filename: String,
@@ -2749,6 +2754,7 @@ pub struct RawLoadOpts {
     pub root_transform: Transform,
     pub key_clamp_threshold: f64,
     pub unicode_error_handling: UnicodeErrorHandling,
+    pub retain_vertex_attrib_w: bool,
     pub retain_dom: bool,
     pub file_format: FileFormat,
     pub file_format_lookahead: usize,
@@ -2844,7 +2850,7 @@ pub struct RawTessellateCurveOpts {
     pub _begin_zero: u32,
     pub temp_allocator: RawAllocatorOpts,
     pub result_allocator: RawAllocatorOpts,
-    pub span_subdivision: u32,
+    pub span_subdivision: usize,
     pub _end_zero: u32,
 }
 
@@ -2854,8 +2860,8 @@ pub struct RawTessellateSurfaceOpts {
     pub _begin_zero: u32,
     pub temp_allocator: RawAllocatorOpts,
     pub result_allocator: RawAllocatorOpts,
-    pub span_subdivision_u: u32,
-    pub span_subdivision_v: u32,
+    pub span_subdivision_u: usize,
+    pub span_subdivision_v: usize,
     pub skip_mesh_parts: bool,
     pub _end_zero: u32,
 }
@@ -3242,6 +3248,7 @@ pub struct LoadOpts<'a> {
     pub root_transform: Transform,
     pub key_clamp_threshold: f64,
     pub unicode_error_handling: UnicodeErrorHandling,
+    pub retain_vertex_attrib_w: bool,
     pub retain_dom: bool,
     pub file_format: FileFormat,
     pub file_format_lookahead: usize,
@@ -3314,6 +3321,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             root_transform: self.root_transform,
             key_clamp_threshold: self.key_clamp_threshold,
             unicode_error_handling: self.unicode_error_handling,
+            retain_vertex_attrib_w: self.retain_vertex_attrib_w,
             retain_dom: self.retain_dom,
             file_format: self.file_format,
             file_format_lookahead: self.file_format_lookahead,
@@ -3385,6 +3393,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             root_transform: self.root_transform,
             key_clamp_threshold: self.key_clamp_threshold,
             unicode_error_handling: self.unicode_error_handling,
+            retain_vertex_attrib_w: self.retain_vertex_attrib_w,
             retain_dom: self.retain_dom,
             file_format: self.file_format,
             file_format_lookahead: self.file_format_lookahead,
@@ -3594,7 +3603,7 @@ impl FromRust for BakeOpts {
 pub struct TessellateCurveOpts {
     pub temp_allocator: AllocatorOpts<>,
     pub result_allocator: AllocatorOpts<>,
-    pub span_subdivision: u32,
+    pub span_subdivision: usize,
 }
 
 impl FromRust for TessellateCurveOpts {
@@ -3625,8 +3634,8 @@ impl FromRust for TessellateCurveOpts {
 pub struct TessellateSurfaceOpts {
     pub temp_allocator: AllocatorOpts<>,
     pub result_allocator: AllocatorOpts<>,
-    pub span_subdivision_u: u32,
-    pub span_subdivision_v: u32,
+    pub span_subdivision_u: usize,
+    pub span_subdivision_v: usize,
     pub skip_mesh_parts: bool,
 }
 
@@ -3847,7 +3856,6 @@ extern "C" {
     pub fn ufbx_open_memory(stream: *mut RawStream, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_evaluate_curve(curve: *const AnimCurve, time: f64, default_value: Real) -> Real;
     pub fn ufbx_evaluate_anim_value_real(anim_value: *const AnimValue, time: f64) -> Real;
-    pub fn ufbx_evaluate_anim_value_vec2(anim_value: *const AnimValue, time: f64) -> Vec2;
     pub fn ufbx_evaluate_anim_value_vec3(anim_value: *const AnimValue, time: f64) -> Vec3;
     pub fn ufbx_evaluate_prop_len(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64) -> Prop;
     pub fn ufbx_evaluate_props(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize) -> Props;
@@ -3928,6 +3936,7 @@ extern "C" {
     pub fn ufbx_catch_get_vertex_vec2(panic: *mut Panic, v: *const VertexVec2, index: usize) -> Vec2;
     pub fn ufbx_catch_get_vertex_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Vec3;
     pub fn ufbx_catch_get_vertex_vec4(panic: *mut Panic, v: *const VertexVec4, index: usize) -> Vec4;
+    pub fn ufbx_catch_get_vertex_w_vec3(panic: *mut Panic, v: *const VertexVec3, index: usize) -> Real;
     pub fn ufbx_as_unknown(element: *const Element) -> *mut Unknown;
     pub fn ufbx_as_node(element: *const Element) -> *mut Node;
     pub fn ufbx_as_mesh(element: *const Element) -> *mut Mesh;
@@ -3970,40 +3979,6 @@ extern "C" {
     pub fn ufbx_as_audio_clip(element: *const Element) -> *mut AudioClip;
     pub fn ufbx_as_pose(element: *const Element) -> *mut Pose;
     pub fn ufbx_as_metadata_object(element: *const Element) -> *mut MetadataObject;
-    pub fn ufbx_ffi_find_int_len(retval: *mut i64, props: *const Props, name: *const u8, name_len: usize, def: *const i64);
-    pub fn ufbx_ffi_find_vec3_len(retval: *mut Vec3, props: *const Props, name: *const u8, name_len: usize, def: *const Vec3);
-    pub fn ufbx_ffi_find_string_len(retval: *mut String, props: *const Props, name: *const u8, name_len: usize, def: *const String);
-    pub fn ufbx_ffi_find_anim_props(retval: *mut List<AnimProp>, layer: *const AnimLayer, element: *const Element);
-    pub fn ufbx_ffi_get_compatible_matrix_for_normals(retval: *mut Matrix, node: *const Node);
-    pub fn ufbx_ffi_evaluate_anim_value_vec2(retval: *mut Vec2, anim_value: *const AnimValue, time: f64);
-    pub fn ufbx_ffi_evaluate_anim_value_vec3(retval: *mut Vec3, anim_value: *const AnimValue, time: f64);
-    pub fn ufbx_ffi_evaluate_prop_len(retval: *mut Prop, anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64);
-    pub fn ufbx_ffi_evaluate_props(retval: *mut Props, anim: *const Anim, element: *mut Element, time: f64, buffer: *mut Prop, buffer_size: usize);
-    pub fn ufbx_ffi_evaluate_transform(retval: *mut Transform, anim: *const Anim, node: *const Node, time: f64);
-    pub fn ufbx_ffi_evaluate_blend_weight(anim: *const Anim, channel: *const BlendChannel, time: f64) -> Real;
-    pub fn ufbx_ffi_quat_mul(retval: *mut Quat, a: *const Quat, b: *const Quat);
-    pub fn ufbx_ffi_quat_normalize(retval: *mut Quat, q: *const Quat);
-    pub fn ufbx_ffi_quat_fix_antipodal(retval: *mut Quat, q: *const Quat, reference: *const Quat);
-    pub fn ufbx_ffi_quat_slerp(retval: *mut Quat, a: *const Quat, b: *const Quat, t: Real);
-    pub fn ufbx_ffi_quat_rotate_vec3(retval: *mut Vec3, q: *const Quat, v: *const Vec3);
-    pub fn ufbx_ffi_quat_to_euler(retval: *mut Vec3, q: *const Quat, order: RotationOrder);
-    pub fn ufbx_ffi_euler_to_quat(retval: *mut Quat, v: *const Vec3, order: RotationOrder);
-    pub fn ufbx_ffi_matrix_mul(retval: *mut Matrix, a: *const Matrix, b: *const Matrix);
-    pub fn ufbx_ffi_matrix_invert(retval: *mut Matrix, m: *const Matrix);
-    pub fn ufbx_ffi_matrix_for_normals(retval: *mut Matrix, m: *const Matrix);
-    pub fn ufbx_ffi_transform_position(retval: *mut Vec3, m: *const Matrix, v: *const Vec3);
-    pub fn ufbx_ffi_transform_direction(retval: *mut Vec3, m: *const Matrix, v: *const Vec3);
-    pub fn ufbx_ffi_transform_to_matrix(retval: *mut Matrix, t: *const Transform);
-    pub fn ufbx_ffi_matrix_to_transform(retval: *mut Transform, m: *const Matrix);
-    pub fn ufbx_ffi_get_skin_vertex_matrix(retval: *mut Matrix, skin: *const SkinDeformer, vertex: usize, fallback: *const Matrix);
-    pub fn ufbx_ffi_get_blend_shape_vertex_offset(retval: *mut Vec3, shape: *const BlendShape, vertex: usize);
-    pub fn ufbx_ffi_get_blend_vertex_offset(retval: *mut Vec3, blend: *const BlendDeformer, vertex: usize);
-    pub fn ufbx_ffi_evaluate_nurbs_curve(retval: *mut CurvePoint, curve: *const NurbsCurve, u: Real);
-    pub fn ufbx_ffi_evaluate_nurbs_surface(retval: *mut SurfacePoint, surface: *const NurbsSurface, u: Real, v: Real);
-    pub fn ufbx_ffi_get_weighted_face_normal(retval: *mut Vec3, positions: *const VertexVec3, face: *const Face);
-    pub fn ufbx_ffi_triangulate_face(indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: *const Face) -> u32;
-    pub fn ufbx_ffi_evaluate_baked_vec3(keyframes: *const BakedVec3, num_keyframes: usize, time: f64) -> Vec3;
-    pub fn ufbx_ffi_evaluate_baked_quat(keyframes: *const BakedQuat, num_keyframes: usize, time: f64) -> Quat;
 }
 pub struct SceneRoot {
     scene: *mut Scene,
@@ -4439,11 +4414,6 @@ pub fn evaluate_anim_value_real(anim_value: &AnimValue, time: f64) -> Real {
     result
 }
 
-pub fn evaluate_anim_value_vec2(anim_value: &AnimValue, time: f64) -> Vec2 {
-    let result = unsafe { ufbx_evaluate_anim_value_vec2(anim_value as *const AnimValue, time) };
-    result
-}
-
 pub fn evaluate_anim_value_vec3(anim_value: &AnimValue, time: f64) -> Vec3 {
     let result = unsafe { ufbx_evaluate_anim_value_vec3(anim_value as *const AnimValue, time) };
     result
@@ -4527,12 +4497,12 @@ pub fn bake_anim(scene: &Scene, anim: &Anim, opts: BakeOpts) -> Result<BakedAnim
 }
 
 pub fn evaluate_baked_vec3(keyframes: &[BakedVec3], time: f64) -> Vec3 {
-    let result = unsafe { ufbx_ffi_evaluate_baked_vec3(keyframes.as_ptr(), keyframes.len(), time) };
+    let result = unsafe { ufbx_evaluate_baked_vec3(List::from_slice(keyframes), time) };
     result
 }
 
 pub fn evaluate_baked_quat(keyframes: &[BakedQuat], time: f64) -> Quat {
-    let result = unsafe { ufbx_ffi_evaluate_baked_quat(keyframes.as_ptr(), keyframes.len(), time) };
+    let result = unsafe { ufbx_evaluate_baked_quat(List::from_slice(keyframes), time) };
     result
 }
 
@@ -4937,6 +4907,15 @@ pub fn get_vertex_vec4(v: &VertexVec4, index: usize) -> Vec4 {
     let result = unsafe { ufbx_catch_get_vertex_vec4(&mut panic, v as *const VertexVec4, index) };
     if panic.did_panic {
         panic!("ufbx::get_vertex_vec4() {}", panic.message());
+    }
+    result
+}
+
+pub fn get_vertex_w_vec3(v: &VertexVec3, index: usize) -> Real {
+    let mut panic: Panic = Default::default();
+    let result = unsafe { ufbx_catch_get_vertex_w_vec3(&mut panic, v as *const VertexVec3, index) };
+    if panic.did_panic {
+        panic!("ufbx::get_vertex_w_vec3() {}", panic.message());
     }
     result
 }
@@ -5355,10 +5334,6 @@ impl AnimValue {
 
     pub fn evaluate_real(&self, time: f64) -> Real {
         evaluate_anim_value_real(&self, time)
-    }
-
-    pub fn evaluate_vec2(&self, time: f64) -> Vec2 {
-        evaluate_anim_value_vec2(&self, time)
     }
 
     pub fn evaluate_vec3(&self, time: f64) -> Vec3 {
