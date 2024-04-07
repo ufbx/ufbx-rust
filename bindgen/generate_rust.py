@@ -356,20 +356,6 @@ pub unsafe fn thread_pool_get_user_ptr(ctx: ThreadPoolContext) -> *mut c_void {
 }
 """
 
-override_functions["ufbx_evaluate_baked_vec3"] = """
-pub fn evaluate_baked_vec3(keyframes: &[BakedVec3], time: f64) -> Vec3 {
-    let result = unsafe { ufbx_ffi_evaluate_baked_vec3(keyframes.as_ptr(), keyframes.len(), time) };
-    result
-}
-"""
-
-override_functions["ufbx_evaluate_baked_quat"] = """
-pub fn evaluate_baked_quat(keyframes: &[BakedQuat], time: f64) -> Quat {
-    let result = unsafe { ufbx_ffi_evaluate_baked_quat(keyframes.as_ptr(), keyframes.len(), time) };
-    result
-}
-"""
-
 override_functions["ufbx_evaluate_prop_len"] = """
 pub fn evaluate_prop<'a, 'b>(anim: &'a Anim, element: &'a Element, name: &'b str, time: f64) -> ExternalRef<'b, Prop>
     where 'a: 'b
@@ -1346,6 +1332,8 @@ def emit_arg_pass(args: List[str], ra: RustArgument):
         args.append(f"{ra.name}.len()")
     elif ra.type.ir.kind == "pointer":
         args.append(f"{ra.name} as {ra.type.fmt_raw()}")
+    elif ra.type.is_list:
+        args.append(f"List::from_slice({ra.name})")
     else:
         args.append(ra.name)
 
