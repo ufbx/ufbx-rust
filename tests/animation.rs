@@ -235,3 +235,73 @@ fn anim_override() {
         w: 1.0,
     });
 }
+
+#[test]
+fn cube_anim_bake() {
+    let scene = ufbx::load_file("tests/data/cube_anim.fbx", Default::default())
+        .expect("expected to load scene");
+
+    let cube = scene.find_node("pCube1").expect("expected to find a cube");
+
+    let refs = [
+        (0.0/24.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+        (4.0/24.0, (0.0, 0.519, 0.0), (11.667, 11.667, 0.0), (1.052, 1.104, 1.156)),
+        (8.0/24.0, (0.0, 1.481, 0.0), (33.333, 33.333, 0.0), (1.148, 1.296, 1.444)),
+        (12.0/24.0, (0.0, 2.0, 0.0), (45.0, 45.0, 0.0), (1.2, 1.4, 1.6)),
+    ];
+
+    let bake = ufbx::bake_anim(&scene, &scene.anim, ufbx::BakeOpts::default())
+        .expect("expected to bake animation");
+
+    let bake_node = bake.nodes
+        .iter()
+        .find(|n| n.typed_id == cube.element.typed_id)
+        .expect("expected to bake cube");
+
+    for &(time, pos, rot, scl) in &refs {
+        let translation = ufbx::evaluate_baked_vec3(&bake_node.translation_keys, time);
+        let rotation = ufbx::evaluate_baked_quat(&bake_node.rotation_keys, time);
+        let scale = ufbx::evaluate_baked_vec3(&bake_node.scale_keys, time);
+
+        assert_close(pos.0, translation.x);
+        assert_close(pos.1, translation.y);
+        assert_close(pos.2, translation.z);
+
+        let euler = ufbx::quat_to_euler(rotation, ufbx::RotationOrder::Xyz);
+        assert_close(rot.0, euler.x);
+        assert_close(rot.1, euler.y);
+        assert_close(rot.2, euler.z);
+
+        assert_close(scl.0, scale.x);
+        assert_close(scl.1, scale.y);
+        assert_close(scl.2, scale.z);
+    }
+
+    let material_refs = [
+        (0.0/24.0, (1.0, 0.0, 0.0)),
+        (4.0/24.0, (0.741, 0.259, 0.0)),
+        (8.0/24.0, (0.259, 0.741, 0.0)),
+        (12.0/24.0, (0.0, 1.0, 0.0)),
+    ];
+
+    let mesh = cube.mesh.as_ref().expect("expected cube to have mesh");
+    let material = mesh.materials.get(0).expect("expected mesh to have material");
+    assert!(material.element.name == "lambert1");
+
+    let bake_mat = bake.elements
+        .iter()
+        .find(|n| n.element_id == material.element.element_id)
+        .expect("expected to bake lambert1");
+
+    let bake_prop = bake_mat.props
+        .iter()
+        .find(|p| p.name == "DiffuseColor")
+        .expect("expected to find DiffuseColor property");
+
+    for &(time, ref_color) in &material_refs {
+        let diffuse_color = ufbx::evaluate_baked_vec3(&bake_prop.keys, time);
+        assert_close(ref_color.0, diffuse_color.x);
+        assert_close(ref_color.1, diffuse_color.y);
+        assert_close(ref_color.2, diffuse_color.z);
+    }
+}
