@@ -382,6 +382,7 @@ pub struct Node {
     pub mesh: Option<Ref<Mesh>>,
     pub light: Option<Ref<Light>>,
     pub camera: Option<Ref<Camera>>,
+    pub bone: Option<Ref<Bone>>,
     pub attrib: Option<Ref<Element>>,
     pub geometry_transform_helper: Option<Ref<Node>>,
     pub scale_helper: Option<Ref<Node>>,
@@ -637,6 +638,7 @@ pub struct Mesh {
     pub face_groups: List<FaceGroup>,
     pub material_parts: List<MeshPart>,
     pub face_group_parts: List<MeshPart>,
+    pub material_part_usage_order: List<u32>,
     pub skinned_is_local: bool,
     pub skinned_position: VertexVec3,
     pub skinned_normal: VertexVec3,
@@ -1958,12 +1960,13 @@ pub enum WarningType {
     MissingGeometryData = 3,
     DuplicateConnection = 4,
     BadVertexWAttribute = 5,
-    IndexClamped = 6,
-    BadUnicode = 7,
-    BadElementConnectedToRoot = 8,
-    DuplicateObjectId = 9,
-    EmptyFaceRemoved = 10,
-    UnknownObjDirective = 11,
+    MissingPolygonMapping = 6,
+    IndexClamped = 7,
+    BadUnicode = 8,
+    BadElementConnectedToRoot = 9,
+    DuplicateObjectId = 10,
+    EmptyFaceRemoved = 11,
+    UnknownObjDirective = 12,
 }
 
 impl Default for WarningType {
@@ -2021,7 +2024,7 @@ pub struct Metadata {
     pub may_contain_missing_vertex_position: bool,
     pub may_contain_broken_elements: bool,
     pub is_unsafe: bool,
-    pub has_warning: [bool; 12],
+    pub has_warning: [bool; 13],
     pub creator: String,
     pub big_endian: bool,
     pub filename: String,
@@ -2046,6 +2049,7 @@ pub struct Metadata {
     pub num_shader_textures: usize,
     pub bone_prop_size_unit: Real,
     pub bone_prop_limb_length_relative: bool,
+    pub ortho_size_unit: Real,
     pub ktime_second: i64,
     pub original_file_path: String,
     pub raw_original_file_path: Blob,
@@ -2540,7 +2544,8 @@ pub enum InheritModeHandling {
     Preserve = 0,
     HelperNodes = 1,
     Compensate = 2,
-    Ignore = 3,
+    CompensateNoFallback = 3,
+    Ignore = 4,
 }
 
 impl Default for InheritModeHandling {
@@ -2653,6 +2658,14 @@ pub struct BakedElement {
 }
 
 #[repr(C)]
+pub struct BakedAnimMetadata {
+    pub result_memory_used: usize,
+    pub temp_memory_used: usize,
+    pub result_allocs: usize,
+    pub temp_allocs: usize,
+}
+
+#[repr(C)]
 pub struct BakedAnim {
     pub nodes: List<BakedNode>,
     pub elements: List<BakedElement>,
@@ -2661,6 +2674,7 @@ pub struct BakedAnim {
     pub playback_duration: f64,
     pub key_time_min: f64,
     pub key_time_max: f64,
+    pub metadata: BakedAnimMetadata,
 }
 
 #[repr(C)]
@@ -2715,6 +2729,7 @@ pub struct RawLoadOpts {
     pub skip_skin_vertices: bool,
     pub skip_mesh_parts: bool,
     pub clean_skin_weights: bool,
+    pub use_blender_pbr_material: bool,
     pub disable_quirks: bool,
     pub strict: bool,
     pub force_single_thread_ascii_parsing: bool,
@@ -2766,6 +2781,8 @@ pub struct RawLoadOpts {
     pub obj_split_groups: bool,
     pub obj_mtl_path: RawString,
     pub obj_mtl_data: RawBlob,
+    pub obj_unit_meters: Real,
+    pub obj_axes: CoordinateAxes,
     pub _end_zero: u32,
 }
 
@@ -3209,6 +3226,7 @@ pub struct LoadOpts<'a> {
     pub skip_skin_vertices: bool,
     pub skip_mesh_parts: bool,
     pub clean_skin_weights: bool,
+    pub use_blender_pbr_material: bool,
     pub disable_quirks: bool,
     pub strict: bool,
     pub force_single_thread_ascii_parsing: bool,
@@ -3260,6 +3278,8 @@ pub struct LoadOpts<'a> {
     pub obj_split_groups: bool,
     pub obj_mtl_path: StringOpt<'a>,
     pub obj_mtl_data: BlobOpt<'a>,
+    pub obj_unit_meters: Real,
+    pub obj_axes: CoordinateAxes,
 }
 
 impl<'a> FromRust for LoadOpts<'a> {
@@ -3282,6 +3302,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             skip_skin_vertices: self.skip_skin_vertices,
             skip_mesh_parts: self.skip_mesh_parts,
             clean_skin_weights: self.clean_skin_weights,
+            use_blender_pbr_material: self.use_blender_pbr_material,
             disable_quirks: self.disable_quirks,
             strict: self.strict,
             force_single_thread_ascii_parsing: self.force_single_thread_ascii_parsing,
@@ -3333,6 +3354,8 @@ impl<'a> FromRust for LoadOpts<'a> {
             obj_split_groups: self.obj_split_groups,
             obj_mtl_path: self.obj_mtl_path.from_rust(arena),
             obj_mtl_data: self.obj_mtl_data.from_rust(arena),
+            obj_unit_meters: self.obj_unit_meters,
+            obj_axes: self.obj_axes,
             _end_zero: 0,
         }
     }
@@ -3354,6 +3377,7 @@ impl<'a> FromRust for LoadOpts<'a> {
             skip_skin_vertices: self.skip_skin_vertices,
             skip_mesh_parts: self.skip_mesh_parts,
             clean_skin_weights: self.clean_skin_weights,
+            use_blender_pbr_material: self.use_blender_pbr_material,
             disable_quirks: self.disable_quirks,
             strict: self.strict,
             force_single_thread_ascii_parsing: self.force_single_thread_ascii_parsing,
@@ -3405,6 +3429,8 @@ impl<'a> FromRust for LoadOpts<'a> {
             obj_split_groups: self.obj_split_groups,
             obj_mtl_path: self.obj_mtl_path.from_rust_mut(arena),
             obj_mtl_data: self.obj_mtl_data.from_rust_mut(arena),
+            obj_unit_meters: self.obj_unit_meters,
+            obj_axes: self.obj_axes,
             _end_zero: 0,
         }
     }
@@ -3869,6 +3895,10 @@ extern "C" {
     pub fn ufbx_bake_anim(scene: *const Scene, anim: *const Anim, opts: *const RawBakeOpts, error: *mut Error) -> *mut BakedAnim;
     pub fn ufbx_retain_baked_anim(bake: *mut BakedAnim);
     pub fn ufbx_free_baked_anim(bake: *mut BakedAnim);
+    pub fn ufbx_find_baked_node_by_typed_id(bake: *mut BakedAnim, typed_id: u32) -> *mut BakedNode;
+    pub fn ufbx_find_baked_node(bake: *mut BakedAnim, node: *mut Node) -> *mut BakedNode;
+    pub fn ufbx_find_baked_element_by_element_id(bake: *mut BakedAnim, element_id: u32) -> *mut BakedElement;
+    pub fn ufbx_find_baked_element(bake: *mut BakedAnim, element: *mut Element) -> *mut BakedElement;
     pub fn ufbx_evaluate_baked_vec3(keyframes: List<BakedVec3>, time: f64) -> Vec3;
     pub fn ufbx_evaluate_baked_quat(keyframes: List<BakedQuat>, time: f64) -> Quat;
     pub fn ufbx_get_bone_pose(pose: *const Pose, node: *const Node) -> *mut BonePose;
@@ -3877,6 +3907,7 @@ extern "C" {
     pub fn ufbx_find_shader_prop_bindings_len(shader: *const Shader, name: *const u8, name_len: usize) -> List<ShaderPropBinding>;
     pub fn ufbx_find_shader_texture_input_len(shader: *const ShaderTexture, name: *const u8, name_len: usize) -> *mut ShaderTextureInput;
     pub fn ufbx_coordinate_axes_valid(axes: CoordinateAxes) -> bool;
+    pub fn ufbx_vec3_normalize(v: Vec3) -> Vec3;
     pub fn ufbx_quat_dot(a: Quat, b: Quat) -> Real;
     pub fn ufbx_quat_mul(a: Quat, b: Quat) -> Quat;
     pub fn ufbx_quat_normalize(q: Quat) -> Quat;
@@ -4496,6 +4527,26 @@ pub fn bake_anim(scene: &Scene, anim: &Anim, opts: BakeOpts) -> Result<BakedAnim
     unsafe { bake_anim_raw(scene, anim, &opts_raw) }
 }
 
+pub fn find_baked_node_by_typed_id<'a>(bake: &mut BakedAnim, typed_id: u32) -> Option<&'a BakedNode> {
+    let result = unsafe { ufbx_find_baked_node_by_typed_id(bake as *mut BakedAnim, typed_id) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn find_baked_node<'a>(bake: &mut BakedAnim, node: &'a mut Node) -> Option<&'a BakedNode> {
+    let result = unsafe { ufbx_find_baked_node(bake as *mut BakedAnim, node as *mut Node) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn find_baked_element_by_element_id<'a>(bake: &mut BakedAnim, element_id: u32) -> Option<&'a BakedElement> {
+    let result = unsafe { ufbx_find_baked_element_by_element_id(bake as *mut BakedAnim, element_id) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn find_baked_element<'a>(bake: &mut BakedAnim, element: &'a mut Element) -> Option<&'a BakedElement> {
+    let result = unsafe { ufbx_find_baked_element(bake as *mut BakedAnim, element as *mut Element) };
+    if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
 pub fn evaluate_baked_vec3(keyframes: &[BakedVec3], time: f64) -> Vec3 {
     let result = unsafe { ufbx_evaluate_baked_vec3(List::from_slice(keyframes), time) };
     result
@@ -4533,6 +4584,11 @@ pub fn find_shader_texture_input<'a>(shader: &ShaderTexture, name: &str) -> Opti
 
 pub fn coordinate_axes_valid(axes: CoordinateAxes) -> bool {
     let result = unsafe { ufbx_coordinate_axes_valid(axes) };
+    result
+}
+
+pub fn vec3_normalize(v: Vec3) -> Vec3 {
+    let result = unsafe { ufbx_vec3_normalize(v) };
     result
 }
 
