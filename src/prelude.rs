@@ -524,6 +524,8 @@ unsafe extern "C" fn stream_imp_box_close(user: *mut c_void) {
     imp.close()
 }
 
+// TODO: Expose these somehow
+#[allow(dead_code)]
 struct StreamRead<T: Read>(T);
 
 impl<T: Read> StreamInterface for StreamRead<T> {
