@@ -202,6 +202,7 @@ impl<T> Default for RawList<T> {
 }
 
 #[repr(C)]
+#[allow(dead_code)] // Currently not used
 pub struct OptionRef<T> {
     ptr: *const T,
     _marker: PhantomData<T>,
