@@ -1,3 +1,5 @@
+#![allow(unused_braces)]
+
 pub mod generated;
 pub mod prelude;
 

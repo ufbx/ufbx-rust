@@ -12,7 +12,7 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, ThreadPoolContext, format_flags};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, ThreadPoolContext, OpenFileContext, format_flags};
 """.strip()
 
 post_ffi = r"""
@@ -286,6 +286,7 @@ primitive_types = {
     "bool": "bool",
     "ufbx_real": "Real",
     "ufbx_thread_pool_context": "ThreadPoolContext",
+    "ufbx_open_file_context": "OpenFileContext",
 }
 
 default_derive_types = {
@@ -303,6 +304,8 @@ ignore_types = {
 ignore_non_raw = {
     "ufbx_open_file",
     "ufbx_open_memory",
+    "ufbx_open_file_ctx",
+    "ufbx_open_memory_ctx",
     "ufbx_default_open_file",
 }
 
@@ -1424,7 +1427,8 @@ def emit_function(rf: RustFunction, non_raw: bool = False):
         params = []
         for arg in rf.args:
             if arg.is_raw:
-                params.append(f"&{arg.name}_raw")
+                mut = "" if arg.is_const else "mut "
+                params.append(f"&{mut}{arg.name}_raw")
             else:
                 params.append(arg.name)
         params_str = ", ".join(params)

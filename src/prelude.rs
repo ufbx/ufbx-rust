@@ -17,6 +17,7 @@ use crate::generated::format_error;
 
 pub type Real = f64;
 pub type ThreadPoolContext = usize;
+pub type OpenFileContext = usize;
 
 #[repr(C)]
 pub struct List<T> {
@@ -319,6 +320,7 @@ pub trait StreamInterface {
             true
         }
     }
+    fn size(&mut self) -> u64 { 0 }
     fn close(&mut self) { }
 }
 
@@ -520,6 +522,11 @@ unsafe extern "C" fn stream_imp_skip(user: *mut c_void, size: usize) -> bool {
     imp.skip(size)
 }
 
+unsafe extern "C" fn stream_imp_size(user: *mut c_void) -> u64 {
+    let imp = &mut *(user as *mut Box<dyn StreamInterface>);
+    imp.size()
+}
+
 unsafe extern "C" fn stream_imp_box_close(user: *mut c_void) {
     let mut imp = Box::from_raw(user as *mut Box<dyn StreamInterface>);
     imp.close()
@@ -550,6 +557,18 @@ impl<T: Read + Seek> StreamInterface for StreamReadSeek<T> {
             Err(_) => false,
         }
     }
+    fn size(&mut self) -> u64 {
+        if let Ok(start) = self.0.stream_position() {
+            if let Ok(end) = self.0.seek(SeekFrom::End(0)) {
+                if self.0.seek(SeekFrom::Start(start)).is_err() {
+                    return end - start
+                } else {
+                    return u64::MAX
+                }
+            }
+        }
+        0
+    }
 }
 
 impl Stream {
@@ -563,12 +582,14 @@ impl Stream {
             Stream::Read(b) => RawStream {
                 read_fn: Some(stream_read_read),
                 skip_fn: None,
+                size_fn: None,
                 close_fn: Some(stream_read_close),
                 user: Box::into_raw(Box::new(b)) as *mut _,
             },
             Stream::Box(b) => RawStream {
                 read_fn: Some(stream_imp_read),
                 skip_fn: Some(stream_imp_skip),
+                size_fn: Some(stream_imp_size),
                 close_fn: Some(stream_imp_box_close),
                 user: Box::into_raw(Box::new(b)) as *mut _,
             },

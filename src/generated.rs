@@ -2,7 +2,7 @@ use std::ffi::{c_void};
 use std::{marker, result, ptr, mem, str};
 use std::fmt::{self, Debug};
 use std::ops::{Deref, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, FnMut, Index};
-use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, ThreadPoolContext, format_flags};
+use crate::prelude::{Real, List, Ref, RefList, String, Blob, RawString, RawBlob, RawList, Unsafe, ExternalRef, InlineBuf, VertexStream, Arena, FromRust, StringOpt, BlobOpt, ListOpt, ThreadPoolContext, OpenFileContext, format_flags};
 use crate::prelude::{Allocator, Stream, call_open_file_cb, call_close_memory_cb, call_progress_cb, ThreadPool};
 
 #[repr(C)]
@@ -2307,6 +2307,7 @@ pub struct RawAllocatorOpts {
 pub struct RawStream {
     pub read_fn: Option<unsafe extern "C" fn (*mut c_void, *mut c_void, usize) -> usize>,
     pub skip_fn: Option<unsafe extern "C" fn (*mut c_void, usize) -> bool>,
+    pub size_fn: Option<unsafe extern "C" fn (*mut c_void) -> u64>,
     pub close_fn: Option<unsafe extern "C" fn (*mut c_void)>,
     pub user: *mut c_void,
 }
@@ -2316,6 +2317,7 @@ impl Default for RawStream {
         RawStream {
             read_fn: None,
             skip_fn: None,
+            size_fn: None,
             close_fn: None,
             user: ptr::null::<c_void>() as *mut c_void,
         }
@@ -2336,8 +2338,8 @@ impl Default for OpenFileType {
 
 #[repr(C)]
 pub struct OpenFileInfo {
+    pub context: OpenFileContext,
     pub type_: OpenFileType,
-    pub temp_allocator: RawAllocator,
     pub original_filename: Blob,
 }
 
@@ -2354,6 +2356,14 @@ impl Default for RawOpenFileCb {
             user: ptr::null::<c_void>() as *mut c_void,
         }
     }
+}
+
+#[repr(C)]
+pub struct OpenFileOpts {
+    _begin_zero: u32,
+    pub allocator: RawAllocatorOpts,
+    pub filename_null_terminated: bool,
+    _end_zero: u32,
 }
 
 #[repr(C)]
@@ -3860,30 +3870,46 @@ extern "C" {
     pub fn ufbx_retain_scene(scene: *mut Scene);
     pub fn ufbx_format_error(dst: *mut u8, dst_size: usize, error: *const Error) -> usize;
     pub fn ufbx_find_prop_len(props: *const Props, name: *const u8, name_len: usize) -> *mut Prop;
+    pub fn ufbx_find_prop(props: *const Props, name: *const u8) -> *mut Prop;
     pub fn ufbx_find_real_len(props: *const Props, name: *const u8, name_len: usize, def: Real) -> Real;
+    pub fn ufbx_find_real(props: *const Props, name: *const u8, def: Real) -> Real;
     pub fn ufbx_find_vec3_len(props: *const Props, name: *const u8, name_len: usize, def: Vec3) -> Vec3;
+    pub fn ufbx_find_vec3(props: *const Props, name: *const u8, def: Vec3) -> Vec3;
     pub fn ufbx_find_int_len(props: *const Props, name: *const u8, name_len: usize, def: i64) -> i64;
+    pub fn ufbx_find_int(props: *const Props, name: *const u8, def: i64) -> i64;
     pub fn ufbx_find_bool_len(props: *const Props, name: *const u8, name_len: usize, def: bool) -> bool;
+    pub fn ufbx_find_bool(props: *const Props, name: *const u8, def: bool) -> bool;
     pub fn ufbx_find_string_len(props: *const Props, name: *const u8, name_len: usize, def: String) -> String;
+    pub fn ufbx_find_string(props: *const Props, name: *const u8, def: String) -> String;
     pub fn ufbx_find_blob_len(props: *const Props, name: *const u8, name_len: usize, def: Blob) -> Blob;
+    pub fn ufbx_find_blob(props: *const Props, name: *const u8, def: Blob) -> Blob;
     pub fn ufbx_find_prop_concat(props: *const Props, parts: *const String, num_parts: usize) -> *mut Prop;
     pub fn ufbx_get_prop_element(element: *const Element, prop: *const Prop, type_: ElementType) -> *mut Element;
     pub fn ufbx_find_prop_element_len(element: *const Element, name: *const u8, name_len: usize, type_: ElementType) -> *mut Element;
+    pub fn ufbx_find_prop_element(element: *const Element, name: *const u8, type_: ElementType) -> *mut Element;
     pub fn ufbx_find_element_len(scene: *const Scene, type_: ElementType, name: *const u8, name_len: usize) -> *mut Element;
+    pub fn ufbx_find_element(scene: *const Scene, type_: ElementType, name: *const u8) -> *mut Element;
     pub fn ufbx_find_node_len(scene: *const Scene, name: *const u8, name_len: usize) -> *mut Node;
+    pub fn ufbx_find_node(scene: *const Scene, name: *const u8) -> *mut Node;
     pub fn ufbx_find_anim_stack_len(scene: *const Scene, name: *const u8, name_len: usize) -> *mut AnimStack;
+    pub fn ufbx_find_anim_stack(scene: *const Scene, name: *const u8) -> *mut AnimStack;
     pub fn ufbx_find_material_len(scene: *const Scene, name: *const u8, name_len: usize) -> *mut Material;
+    pub fn ufbx_find_material(scene: *const Scene, name: *const u8) -> *mut Material;
     pub fn ufbx_find_anim_prop_len(layer: *const AnimLayer, element: *const Element, prop: *const u8, prop_len: usize) -> *mut AnimProp;
+    pub fn ufbx_find_anim_prop(layer: *const AnimLayer, element: *const Element, prop: *const u8) -> *mut AnimProp;
     pub fn ufbx_find_anim_props(layer: *const AnimLayer, element: *const Element) -> List<AnimProp>;
     pub fn ufbx_get_compatible_matrix_for_normals(node: *const Node) -> Matrix;
     pub fn ufbx_inflate(dst: *mut c_void, dst_size: usize, input: *const InflateInput, retain: *mut InflateRetain) -> isize;
-    pub fn ufbx_open_file(stream: *mut RawStream, path: *const u8, path_len: usize) -> bool;
     pub fn ufbx_default_open_file(user: *mut c_void, stream: *mut RawStream, path: *const u8, path_len: usize, info: *const OpenFileInfo) -> bool;
+    pub fn ufbx_open_file(stream: *mut RawStream, path: *const u8, path_len: usize, opts: *const OpenFileOpts, error: *mut Error) -> bool;
+    pub fn ufbx_open_file_ctx(stream: *mut RawStream, ctx: OpenFileContext, path: *const u8, path_len: usize, opts: *const OpenFileOpts, error: *mut Error) -> bool;
     pub fn ufbx_open_memory(stream: *mut RawStream, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
+    pub fn ufbx_open_memory_ctx(stream: *mut RawStream, ctx: OpenFileContext, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_evaluate_curve(curve: *const AnimCurve, time: f64, default_value: Real) -> Real;
     pub fn ufbx_evaluate_anim_value_real(anim_value: *const AnimValue, time: f64) -> Real;
     pub fn ufbx_evaluate_anim_value_vec3(anim_value: *const AnimValue, time: f64) -> Vec3;
     pub fn ufbx_evaluate_prop_len(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64) -> Prop;
+    pub fn ufbx_evaluate_prop(anim: *const Anim, element: *const Element, name: *const u8, time: f64) -> Prop;
     pub fn ufbx_evaluate_props(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize) -> Props;
     pub fn ufbx_evaluate_transform(anim: *const Anim, node: *const Node, time: f64) -> Transform;
     pub fn ufbx_evaluate_transform_flags(anim: *const Anim, node: *const Node, time: f64, flags: u32) -> Transform;
@@ -3903,9 +3929,13 @@ extern "C" {
     pub fn ufbx_evaluate_baked_quat(keyframes: List<BakedQuat>, time: f64) -> Quat;
     pub fn ufbx_get_bone_pose(pose: *const Pose, node: *const Node) -> *mut BonePose;
     pub fn ufbx_find_prop_texture_len(material: *const Material, name: *const u8, name_len: usize) -> *mut Texture;
+    pub fn ufbx_find_prop_texture(material: *const Material, name: *const u8) -> *mut Texture;
     pub fn ufbx_find_shader_prop_len(shader: *const Shader, name: *const u8, name_len: usize) -> String;
+    pub fn ufbx_find_shader_prop(shader: *const Shader, name: *const u8) -> String;
     pub fn ufbx_find_shader_prop_bindings_len(shader: *const Shader, name: *const u8, name_len: usize) -> List<ShaderPropBinding>;
+    pub fn ufbx_find_shader_prop_bindings(shader: *const Shader, name: *const u8) -> List<ShaderPropBinding>;
     pub fn ufbx_find_shader_texture_input_len(shader: *const ShaderTexture, name: *const u8, name_len: usize) -> *mut ShaderTextureInput;
+    pub fn ufbx_find_shader_texture_input(shader: *const ShaderTexture, name: *const u8) -> *mut ShaderTextureInput;
     pub fn ufbx_coordinate_axes_valid(axes: CoordinateAxes) -> bool;
     pub fn ufbx_vec3_normalize(v: Vec3) -> Vec3;
     pub fn ufbx_quat_dot(a: Quat, b: Quat) -> Real;
@@ -3939,10 +3969,15 @@ extern "C" {
     pub fn ufbx_retain_line_curve(curve: *mut LineCurve);
     pub fn ufbx_find_face_index(mesh: *mut Mesh, index: usize) -> u32;
     pub fn ufbx_catch_triangulate_face(panic: *mut Panic, indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: Face) -> u32;
+    pub fn ufbx_triangulate_face(indices: *mut u32, num_indices: usize, mesh: *const Mesh, face: Face) -> u32;
     pub fn ufbx_catch_compute_topology(panic: *mut Panic, mesh: *const Mesh, topo: *mut TopoEdge, num_topo: usize);
+    pub fn ufbx_compute_topology(mesh: *const Mesh, topo: *mut TopoEdge, num_topo: usize);
     pub fn ufbx_catch_topo_next_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: u32) -> u32;
+    pub fn ufbx_topo_next_vertex_edge(topo: *const TopoEdge, num_topo: usize, index: u32) -> u32;
     pub fn ufbx_catch_topo_prev_vertex_edge(panic: *mut Panic, topo: *const TopoEdge, num_topo: usize, index: u32) -> u32;
+    pub fn ufbx_topo_prev_vertex_edge(topo: *const TopoEdge, num_topo: usize, index: u32) -> u32;
     pub fn ufbx_catch_get_weighted_face_normal(panic: *mut Panic, positions: *const VertexVec3, face: Face) -> Vec3;
+    pub fn ufbx_get_weighted_face_normal(positions: *const VertexVec3, face: Face) -> Vec3;
     pub fn ufbx_catch_generate_normal_mapping(panic: *mut Panic, mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut u32, num_normal_indices: usize, assume_smooth: bool) -> usize;
     pub fn ufbx_generate_normal_mapping(mesh: *const Mesh, topo: *const TopoEdge, num_topo: usize, normal_indices: *mut u32, num_normal_indices: usize, assume_smooth: bool) -> usize;
     pub fn ufbx_catch_compute_normals(panic: *mut Panic, mesh: *const Mesh, positions: *const VertexVec3, normal_indices: *const u32, num_normal_indices: usize, normals: *mut Vec3, num_normals: usize);
@@ -3959,6 +3994,7 @@ extern "C" {
     pub fn ufbx_sample_geometry_cache_real(channel: *const CacheChannel, time: f64, data: *mut Real, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_sample_geometry_cache_vec3(channel: *const CacheChannel, time: f64, data: *mut Vec3, num_data: usize, opts: *const RawGeometryCacheDataOpts) -> usize;
     pub fn ufbx_dom_find_len(parent: *const DomNode, name: *const u8, name_len: usize) -> *mut DomNode;
+    pub fn ufbx_dom_find(parent: *const DomNode, name: *const u8) -> *mut DomNode;
     pub fn ufbx_generate_indices(streams: *const RawVertexStream, num_streams: usize, indices: *mut u32, num_indices: usize, allocator: *const RawAllocatorOpts, error: *mut Error) -> usize;
     pub fn ufbx_thread_pool_run_task(ctx: ThreadPoolContext, index: u32);
     pub fn ufbx_thread_pool_set_user_ptr(ctx: ThreadPoolContext, user_ptr: *mut c_void);
@@ -4416,19 +4452,41 @@ pub fn inflate(dst: &mut [u8], input: &InflateInput, retain: &mut InflateRetain)
     result
 }
 
-pub unsafe fn open_file_raw(stream: &mut RawStream, path: &str) -> bool {
-    let result = { ufbx_open_file(stream as *mut RawStream, path.as_ptr(), path.len()) };
-    result
-}
-
 pub unsafe fn default_open_file_raw(user: *mut c_void, stream: &mut RawStream, path: &str, info: &OpenFileInfo) -> bool {
     let result = { ufbx_default_open_file(user as *mut c_void, stream as *mut RawStream, path.as_ptr(), path.len(), info as *const OpenFileInfo) };
     result
 }
 
+pub unsafe fn open_file_raw(stream: &mut RawStream, path: &str, opts: &OpenFileOpts) -> Result<bool> {
+    let mut error: Error = Error::default();
+    let result = { ufbx_open_file(stream as *mut RawStream, path.as_ptr(), path.len(), opts as *const OpenFileOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(result)
+}
+
+pub unsafe fn open_file_ctx_raw(stream: &mut RawStream, ctx: OpenFileContext, path: &str, opts: &OpenFileOpts) -> Result<bool> {
+    let mut error: Error = Error::default();
+    let result = { ufbx_open_file_ctx(stream as *mut RawStream, ctx, path.as_ptr(), path.len(), opts as *const OpenFileOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(result)
+}
+
 pub unsafe fn open_memory_raw(stream: &mut RawStream, data: &[u8], opts: &RawOpenMemoryOpts) -> Result<bool> {
     let mut error: Error = Error::default();
     let result = { ufbx_open_memory(stream as *mut RawStream, data.as_ptr() as *const c_void, data.len(), opts as *const RawOpenMemoryOpts, &mut error) };
+    if error.type_ != ErrorType::None {
+        return Err(error)
+    }
+    Ok(result)
+}
+
+pub unsafe fn open_memory_ctx_raw(stream: &mut RawStream, ctx: OpenFileContext, data: &[u8], opts: &RawOpenMemoryOpts) -> Result<bool> {
+    let mut error: Error = Error::default();
+    let result = { ufbx_open_memory_ctx(stream as *mut RawStream, ctx, data.as_ptr() as *const c_void, data.len(), opts as *const RawOpenMemoryOpts, &mut error) };
     if error.type_ != ErrorType::None {
         return Err(error)
     }
