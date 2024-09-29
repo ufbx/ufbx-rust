@@ -560,7 +560,7 @@ impl<T: Read + Seek> StreamInterface for StreamReadSeek<T> {
     fn size(&mut self) -> u64 {
         if let Ok(start) = self.0.stream_position() {
             if let Ok(end) = self.0.seek(SeekFrom::End(0)) {
-                if self.0.seek(SeekFrom::Start(start)).is_err() {
+                if self.0.seek(SeekFrom::Start(start)).is_ok() {
                     return end - start
                 } else {
                     return u64::MAX
