@@ -1,4 +1,4 @@
-use std::{fs::File, io::{BufReader, Read}};
+use std::{fs::File, io::{BufReader, Read}, rc::Rc, sync::atomic::{AtomicI32, Ordering}};
 use std::ffi::{CString, c_void};
 use ufbx;
 use libc;
@@ -390,4 +390,138 @@ fn global_settings_props() {
     assert_eq!(ambient_color.value_vec4.x, 0.0);
     assert_eq!(ambient_color.value_vec4.y, 0.0);
     assert_eq!(ambient_color.value_vec4.z, 0.0);
+}
+
+#[test]
+fn blender_default_progress_size() {
+    let mut progress_size: Option<u64> = None;
+    let mut progress_cb = |prog: &ufbx::Progress| {
+        match progress_size {
+            Some(size) => assert_eq!(prog.bytes_total, size),
+            None => progress_size = Some(prog.bytes_total),
+        }
+        ufbx::ProgressResult::Continue
+    };
+
+    let opts = ufbx::LoadOpts {
+        filename: "test".into(),
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let scene = ufbx::load_file("tests/data/blender_default.fbx", opts)
+        .expect("expected to load scene");
+
+    assert_eq!(progress_size, Some(26428));
+    check_blender_default(&scene, false);
+}
+
+#[test]
+fn blender_default_progress_size_file() {
+    let mut progress_size: Option<u64> = None;
+    let mut progress_cb = |prog: &ufbx::Progress| {
+        match progress_size {
+            Some(size) => assert_eq!(prog.bytes_total, size),
+            None => progress_size = Some(prog.bytes_total),
+        }
+        ufbx::ProgressResult::Continue
+    };
+
+    let file = File::open("tests/data/blender_default.fbx").expect("could not find file");
+    let opts = ufbx::LoadOpts {
+        filename: "test".into(),
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let scene = ufbx::load_stream(ufbx::Stream::File(file), opts)
+        .expect("expected to load scene");
+
+    assert_eq!(progress_size, Some(26428));
+    check_blender_default(&scene, false);
+}
+
+struct FailSizeStream {
+    file: File,
+    call_count: Rc<AtomicI32>,
+}
+
+impl ufbx::StreamInterface for FailSizeStream {
+    fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
+        self.file.read(buf).ok()
+    }
+    fn size(&mut self) -> u64 {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
+        u64::MAX
+    }
+}
+
+#[test]
+fn blender_default_progress_size_fail() {
+    let progress_cb = |_: &ufbx::Progress| {
+        ufbx::ProgressResult::Continue
+    };
+
+    let size_calls = Rc::new(AtomicI32::new(0));
+    let file = File::open("tests/data/blender_default.fbx").expect("could not find file");
+    let stream = Box::new(FailSizeStream { file, call_count: size_calls.clone() });
+
+    let opts = ufbx::LoadOpts {
+        filename: "test".into(),
+        progress_cb: ufbx::ProgressCb::Ref(&progress_cb),
+        progress_interval_hint: 256,
+        ..Default::default()
+    };
+    let result = ufbx::load_stream(ufbx::Stream::Box(stream), opts);
+    let err = match result {
+        Ok(_) => panic!("expected loading to fail"),
+        Err(err) => err,
+    };
+    assert!(err.type_ == ufbx::ErrorType::Unknown);
+
+    assert_eq!(size_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn blender_default_progress_size_fail_no_cb() {
+    let size_calls = Rc::new(AtomicI32::new(0));
+    let file = File::open("tests/data/blender_default.fbx").expect("could not find file");
+    let stream = Box::new(FailSizeStream { file, call_count: size_calls.clone() });
+
+    let opts = ufbx::LoadOpts {
+        filename: "test".into(),
+        ..Default::default()
+    };
+    let scene = ufbx::load_stream(ufbx::Stream::Box(stream), opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, false);
+    assert_eq!(size_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn blender_default_progress_size_fail_explicit() {
+    let mut progress_size: Option<u64> = None;
+    let mut progress_cb = |prog: &ufbx::Progress| {
+        match progress_size {
+            Some(size) => assert_eq!(prog.bytes_total, size),
+            None => progress_size = Some(prog.bytes_total),
+        }
+        ufbx::ProgressResult::Continue
+    };
+
+    let size_calls = Rc::new(AtomicI32::new(0));
+    let file = File::open("tests/data/blender_default.fbx").expect("could not find file");
+    let stream = Box::new(FailSizeStream { file, call_count: size_calls.clone() });
+
+    let opts = ufbx::LoadOpts {
+        filename: "test".into(),
+        progress_cb: ufbx::ProgressCb::Mut(&mut progress_cb),
+        file_size_estimate: 26428,
+        ..Default::default()
+    };
+    let scene = ufbx::load_stream(ufbx::Stream::Box(stream), opts)
+        .expect("expected to load scene");
+    check_blender_default(&scene, false);
+    assert_eq!(progress_size, Some(26428));
+    assert_eq!(size_calls.load(Ordering::Relaxed), 0);
 }
