@@ -1,6 +1,6 @@
 [package]
 name = "ufbx"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["bqqbarbhg <bqqbarbhg@gmail.com>"]
 edition = "2018"
 description = "Bindings for ufbx"
