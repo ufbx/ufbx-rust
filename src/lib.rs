@@ -23,7 +23,7 @@ pub fn open_memory(data: &[u8], opts: OpenMemoryOpts) -> Result<Stream> {
 */
 
 pub fn triangulate_face_vec(mut indices: &mut Vec<u32>, mesh: &Mesh, face: Face) -> u32 {
-    if face.num_indices <= 3 {
+    if face.num_indices < 3 {
         indices.clear();
         return 0;
     }
