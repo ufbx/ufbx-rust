@@ -476,8 +476,8 @@ impl ThreadPool {
 
 pub struct VertexStream<'a> {
     pub(crate) data: *mut c_void,
-    pub vertex_count: usize,
-    pub vertex_size: usize,
+    pub(crate) vertex_count: usize,
+    pub(crate) vertex_size: usize,
     _marker: PhantomData<&'a mut ()>,
 }
 
