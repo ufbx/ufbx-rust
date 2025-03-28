@@ -1220,9 +1220,10 @@ pub enum ShaderType {
     E3DsMaxPbrMetalRough = 6,
     E3DsMaxPbrSpecGloss = 7,
     GltfMaterial = 8,
-    ShaderfxGraph = 9,
-    BlenderPhong = 10,
-    WavefrontMtl = 11,
+    OpenpbrMaterial = 9,
+    ShaderfxGraph = 10,
+    BlenderPhong = 11,
+    WavefrontMtl = 12,
 }
 
 impl Default for ShaderType {
@@ -1300,22 +1301,23 @@ pub enum MaterialPbrMap {
     CoatNormal = 36,
     CoatAffectBaseColor = 37,
     CoatAffectBaseRoughness = 38,
-    ThinFilmThickness = 39,
-    ThinFilmIor = 40,
-    EmissionFactor = 41,
-    EmissionColor = 42,
-    Opacity = 43,
-    IndirectDiffuse = 44,
-    IndirectSpecular = 45,
-    NormalMap = 46,
-    TangentMap = 47,
-    DisplacementMap = 48,
-    MatteFactor = 49,
-    MatteColor = 50,
-    AmbientOcclusion = 51,
-    Glossiness = 52,
-    CoatGlossiness = 53,
-    TransmissionGlossiness = 54,
+    ThinFilmFactor = 39,
+    ThinFilmThickness = 40,
+    ThinFilmIor = 41,
+    EmissionFactor = 42,
+    EmissionColor = 43,
+    Opacity = 44,
+    IndirectDiffuse = 45,
+    IndirectSpecular = 46,
+    NormalMap = 47,
+    TangentMap = 48,
+    DisplacementMap = 49,
+    MatteFactor = 50,
+    MatteColor = 51,
+    AmbientOcclusion = 52,
+    Glossiness = 53,
+    CoatGlossiness = 54,
+    TransmissionGlossiness = 55,
 }
 
 impl Default for MaterialPbrMap {
@@ -1419,6 +1421,7 @@ pub struct MaterialPbrMaps {
     pub coat_normal: MaterialMap,
     pub coat_affect_base_color: MaterialMap,
     pub coat_affect_base_roughness: MaterialMap,
+    pub thin_film_factor: MaterialMap,
     pub thin_film_thickness: MaterialMap,
     pub thin_film_ior: MaterialMap,
     pub emission_factor: MaterialMap,
@@ -1742,6 +1745,26 @@ impl Default for Interpolation {
     fn default() -> Self { Self::ConstantPrev }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExtrapolationMode {
+    Constant = 0,
+    Repeat = 1,
+    Mirror = 2,
+    Slope = 3,
+    RepeatRelative = 4,
+}
+
+impl Default for ExtrapolationMode {
+    fn default() -> Self { Self::Constant }
+}
+
+#[repr(C)]
+pub struct Extrapolation {
+    pub mode: ExtrapolationMode,
+    pub repeat_count: i32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 #[derive(Default)]
@@ -1767,8 +1790,12 @@ pub struct Keyframe {
 pub struct AnimCurve {
     pub element: Element,
     pub keyframes: List<Keyframe>,
+    pub pre_extrapolation: Extrapolation,
+    pub post_extrapolation: Extrapolation,
     pub min_value: Real,
     pub max_value: Real,
+    pub min_time: f64,
+    pub max_time: f64,
 }
 
 #[repr(C)]
@@ -1961,12 +1988,14 @@ pub enum WarningType {
     DuplicateConnection = 4,
     BadVertexWAttribute = 5,
     MissingPolygonMapping = 6,
-    IndexClamped = 7,
-    BadUnicode = 8,
-    BadElementConnectedToRoot = 9,
-    DuplicateObjectId = 10,
-    EmptyFaceRemoved = 11,
-    UnknownObjDirective = 12,
+    UnsupportedVersion = 7,
+    IndexClamped = 8,
+    BadUnicode = 9,
+    BadBase64Content = 10,
+    BadElementConnectedToRoot = 11,
+    DuplicateObjectId = 12,
+    EmptyFaceRemoved = 13,
+    UnknownObjDirective = 14,
 }
 
 impl Default for WarningType {
@@ -2024,7 +2053,7 @@ pub struct Metadata {
     pub may_contain_missing_vertex_position: bool,
     pub may_contain_broken_elements: bool,
     pub is_unsafe: bool,
-    pub has_warning: [bool; 13],
+    pub has_warning: [bool; 15],
     pub creator: String,
     pub big_endian: bool,
     pub filename: String,
@@ -2425,6 +2454,7 @@ pub enum ErrorType {
     ThreadedAsciiParse = 20,
     UnsafeOptions = 21,
     DuplicateOverride = 22,
+    UnsupportedVersion = 23,
 }
 
 impl Default for ErrorType {
@@ -2695,8 +2725,8 @@ pub struct ThreadPoolInfo {
 #[repr(C)]
 pub struct RawThreadPool {
     pub init_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, *const ThreadPoolInfo) -> bool>,
-    pub run_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, u32, u32, u32) -> bool>,
-    pub wait_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, u32, u32) -> bool>,
+    pub run_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, u32, u32, u32)>,
+    pub wait_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext, u32, u32)>,
     pub free_fn: Option<unsafe extern "C" fn (*mut c_void, ThreadPoolContext)>,
     pub user: *mut c_void,
 }
@@ -2719,6 +2749,53 @@ pub struct RawThreadOpts {
     pub pool: RawThreadPool,
     pub num_tasks: usize,
     pub memory_limit: usize,
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct EvaluateFlags(u32);
+impl EvaluateFlags {
+    pub const NONE: EvaluateFlags = EvaluateFlags(0);
+    pub const NO_EXTRAPOLATION: EvaluateFlags = EvaluateFlags(0x1);
+}
+
+const EVALUATEFLAGS_NAMES: [(&'static str, u32); 1] = [
+    ("NO_EXTRAPOLATION", 0x1),
+];
+
+impl EvaluateFlags {
+    pub fn any(self) -> bool { self.0 != 0 }
+    pub fn has_any(self, bits: Self) -> bool { (self.0 & bits.0) != 0 }
+    pub fn has_all(self, bits: Self) -> bool { (self.0 & bits.0) == bits.0 }
+}
+impl Default for EvaluateFlags {
+    fn default() -> Self { Self(0) }
+}
+impl Debug for EvaluateFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_flags(f, &EVALUATEFLAGS_NAMES, self.0)
+    }
+}
+impl BitAnd for EvaluateFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output { Self(self.0 & rhs.0) }
+}
+impl BitAndAssign for EvaluateFlags {
+    fn bitand_assign(&mut self, rhs: Self) { *self = Self(self.0 & rhs.0) }
+}
+impl BitOr for EvaluateFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output { Self(self.0 | rhs.0) }
+}
+impl BitOrAssign for EvaluateFlags {
+    fn bitor_assign(&mut self, rhs: Self) { *self = Self(self.0 | rhs.0) }
+}
+impl BitXor for EvaluateFlags {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output { Self(self.0 ^ rhs.0) }
+}
+impl BitXorAssign for EvaluateFlags {
+    fn bitxor_assign(&mut self, rhs: Self) { *self = Self(self.0 ^ rhs.0) }
 }
 
 #[repr(C)]
@@ -2804,6 +2881,7 @@ pub struct RawEvaluateOpts {
     pub result_allocator: RawAllocatorOpts,
     pub evaluate_skinning: bool,
     pub evaluate_caches: bool,
+    pub evaluate_flags: u32,
     pub load_external_files: bool,
     pub open_file_cb: RawOpenFileCb,
     pub _end_zero: u32,
@@ -2864,6 +2942,7 @@ pub struct RawBakeOpts {
     pub step_handling: BakeStepHandling,
     pub step_custom_duration: f64,
     pub step_custom_epsilon: f64,
+    pub evaluate_flags: u32,
     pub key_reduction_enabled: bool,
     pub key_reduction_rotation: bool,
     pub key_reduction_threshold: f64,
@@ -2966,15 +3045,17 @@ impl TransformFlags {
     pub const INCLUDE_TRANSLATION: TransformFlags = TransformFlags(0x10);
     pub const INCLUDE_ROTATION: TransformFlags = TransformFlags(0x20);
     pub const INCLUDE_SCALE: TransformFlags = TransformFlags(0x40);
+    pub const NO_EXTRAPOLATION: TransformFlags = TransformFlags(0x80);
 }
 
-const TRANSFORMFLAGS_NAMES: [(&'static str, u32); 6] = [
+const TRANSFORMFLAGS_NAMES: [(&'static str, u32); 7] = [
     ("IGNORE_SCALE_HELPER", 0x1),
     ("IGNORE_COMPONENTWISE_SCALE", 0x2),
     ("EXPLICIT_INCLUDES", 0x4),
     ("INCLUDE_TRANSLATION", 0x10),
     ("INCLUDE_ROTATION", 0x20),
     ("INCLUDE_SCALE", 0x40),
+    ("NO_EXTRAPOLATION", 0x80),
 ];
 
 impl TransformFlags {
@@ -3452,6 +3533,7 @@ pub struct EvaluateOpts<'a> {
     pub result_allocator: AllocatorOpts<>,
     pub evaluate_skinning: bool,
     pub evaluate_caches: bool,
+    pub evaluate_flags: u32,
     pub load_external_files: bool,
     pub open_file_cb: OpenFileCb<'a>,
 }
@@ -3466,6 +3548,7 @@ impl<'a> FromRust for EvaluateOpts<'a> {
             result_allocator: self.result_allocator.from_rust(arena),
             evaluate_skinning: self.evaluate_skinning,
             evaluate_caches: self.evaluate_caches,
+            evaluate_flags: self.evaluate_flags,
             load_external_files: self.load_external_files,
             open_file_cb: self.open_file_cb.from_rust(),
             _end_zero: 0,
@@ -3479,6 +3562,7 @@ impl<'a> FromRust for EvaluateOpts<'a> {
             result_allocator: self.result_allocator.from_rust_mut(arena),
             evaluate_skinning: self.evaluate_skinning,
             evaluate_caches: self.evaluate_caches,
+            evaluate_flags: self.evaluate_flags,
             load_external_files: self.load_external_files,
             open_file_cb: self.open_file_cb.from_rust_mut(),
             _end_zero: 0,
@@ -3575,6 +3659,7 @@ pub struct BakeOpts {
     pub step_handling: BakeStepHandling,
     pub step_custom_duration: f64,
     pub step_custom_epsilon: f64,
+    pub evaluate_flags: u32,
     pub key_reduction_enabled: bool,
     pub key_reduction_rotation: bool,
     pub key_reduction_threshold: f64,
@@ -3601,6 +3686,7 @@ impl FromRust for BakeOpts {
             step_handling: self.step_handling,
             step_custom_duration: self.step_custom_duration,
             step_custom_epsilon: self.step_custom_epsilon,
+            evaluate_flags: self.evaluate_flags,
             key_reduction_enabled: self.key_reduction_enabled,
             key_reduction_rotation: self.key_reduction_rotation,
             key_reduction_threshold: self.key_reduction_threshold,
@@ -3626,6 +3712,7 @@ impl FromRust for BakeOpts {
             step_handling: self.step_handling,
             step_custom_duration: self.step_custom_duration,
             step_custom_epsilon: self.step_custom_epsilon,
+            evaluate_flags: self.evaluate_flags,
             key_reduction_enabled: self.key_reduction_enabled,
             key_reduction_rotation: self.key_reduction_rotation,
             key_reduction_threshold: self.key_reduction_threshold,
@@ -3906,14 +3993,21 @@ extern "C" {
     pub fn ufbx_open_memory(stream: *mut RawStream, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_open_memory_ctx(stream: *mut RawStream, ctx: OpenFileContext, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_evaluate_curve(curve: *const AnimCurve, time: f64, default_value: Real) -> Real;
+    pub fn ufbx_evaluate_curve_flags(curve: *const AnimCurve, time: f64, default_value: Real, flags: u32) -> Real;
     pub fn ufbx_evaluate_anim_value_real(anim_value: *const AnimValue, time: f64) -> Real;
     pub fn ufbx_evaluate_anim_value_vec3(anim_value: *const AnimValue, time: f64) -> Vec3;
+    pub fn ufbx_evaluate_anim_value_real_flags(anim_value: *const AnimValue, time: f64, flags: u32) -> Real;
+    pub fn ufbx_evaluate_anim_value_vec3_flags(anim_value: *const AnimValue, time: f64, flags: u32) -> Vec3;
     pub fn ufbx_evaluate_prop_len(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64) -> Prop;
     pub fn ufbx_evaluate_prop(anim: *const Anim, element: *const Element, name: *const u8, time: f64) -> Prop;
+    pub fn ufbx_evaluate_prop_len_flags(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64, flags: u32) -> Prop;
+    pub fn ufbx_evaluate_prop_flags(anim: *const Anim, element: *const Element, name: *const u8, time: f64, flags: u32) -> Prop;
     pub fn ufbx_evaluate_props(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize) -> Props;
+    pub fn ufbx_evaluate_props_flags(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize, flags: u32) -> Props;
     pub fn ufbx_evaluate_transform(anim: *const Anim, node: *const Node, time: f64) -> Transform;
     pub fn ufbx_evaluate_transform_flags(anim: *const Anim, node: *const Node, time: f64, flags: u32) -> Transform;
     pub fn ufbx_evaluate_blend_weight(anim: *const Anim, channel: *const BlendChannel, time: f64) -> Real;
+    pub fn ufbx_evaluate_blend_weight_flags(anim: *const Anim, channel: *const BlendChannel, time: f64, flags: u32) -> Real;
     pub fn ufbx_evaluate_scene(scene: *const Scene, anim: *const Anim, time: f64, opts: *const RawEvaluateOpts, error: *mut Error) -> *mut Scene;
     pub fn ufbx_create_anim(scene: *const Scene, opts: *const RawAnimOpts, error: *mut Error) -> *mut Anim;
     pub fn ufbx_free_anim(anim: *mut Anim);
@@ -4498,6 +4592,11 @@ pub fn evaluate_curve(curve: &AnimCurve, time: f64, default_value: Real) -> Real
     result
 }
 
+pub fn evaluate_curve_flags(curve: &AnimCurve, time: f64, default_value: Real, flags: u32) -> Real {
+    let result = unsafe { ufbx_evaluate_curve_flags(curve as *const AnimCurve, time, default_value, flags) };
+    result
+}
+
 pub fn evaluate_anim_value_real(anim_value: &AnimValue, time: f64) -> Real {
     let result = unsafe { ufbx_evaluate_anim_value_real(anim_value as *const AnimValue, time) };
     result
@@ -4508,6 +4607,16 @@ pub fn evaluate_anim_value_vec3(anim_value: &AnimValue, time: f64) -> Vec3 {
     result
 }
 
+pub fn evaluate_anim_value_real_flags(anim_value: &AnimValue, time: f64, flags: u32) -> Real {
+    let result = unsafe { ufbx_evaluate_anim_value_real_flags(anim_value as *const AnimValue, time, flags) };
+    result
+}
+
+pub fn evaluate_anim_value_vec3_flags(anim_value: &AnimValue, time: f64, flags: u32) -> Vec3 {
+    let result = unsafe { ufbx_evaluate_anim_value_vec3_flags(anim_value as *const AnimValue, time, flags) };
+    result
+}
+
 pub fn evaluate_prop<'a, 'b>(anim: &'a Anim, element: &'a Element, name: &'b str, time: f64) -> ExternalRef<'b, Prop>
     where 'a: 'b
 {
@@ -4515,11 +4624,26 @@ pub fn evaluate_prop<'a, 'b>(anim: &'a Anim, element: &'a Element, name: &'b str
     unsafe { ExternalRef::new(result) }
 }
 
+pub fn evaluate_prop_len_flags(anim: &Anim, element: &Element, name: &str, time: f64, flags: u32) -> Prop {
+    let result = unsafe { ufbx_evaluate_prop_len_flags(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time, flags) };
+    result
+}
+
+pub fn evaluate_prop_flags(anim: &Anim, element: &Element, name: &u8, time: f64, flags: u32) -> Prop {
+    let result = unsafe { ufbx_evaluate_prop_flags(anim as *const Anim, element as *const Element, name as *const u8, time, flags) };
+    result
+}
+
 pub fn evaluate_props<'a, 'b>(anim: &'a Anim, element: &'a Element, time: f64, buffer: &'b mut [ExternalRef<'b, Prop>]) -> ExternalRef<'b, Props>
     where 'a: 'b
 {
     let result = unsafe { ufbx_evaluate_props(anim as *const Anim, element as *const Element, time, buffer.as_ptr() as *mut Prop, buffer.len()) };
     unsafe { ExternalRef::new(result) }
+}
+
+pub fn evaluate_props_flags(anim: &Anim, element: &Element, time: f64, buffer: &mut Prop, buffer_size: usize, flags: u32) -> Props {
+    let result = unsafe { ufbx_evaluate_props_flags(anim as *const Anim, element as *const Element, time, buffer as *mut Prop, buffer_size, flags) };
+    result
 }
 
 pub fn evaluate_transform(anim: &Anim, node: &Node, time: f64) -> Transform {
@@ -4534,6 +4658,11 @@ pub fn evaluate_transform_flags(anim: &Anim, node: &Node, time: f64, flags: u32)
 
 pub fn evaluate_blend_weight(anim: &Anim, channel: &BlendChannel, time: f64) -> Real {
     let result = unsafe { ufbx_evaluate_blend_weight(anim as *const Anim, channel as *const BlendChannel, time) };
+    result
+}
+
+pub fn evaluate_blend_weight_flags(anim: &Anim, channel: &BlendChannel, time: f64, flags: u32) -> Real {
+    let result = unsafe { ufbx_evaluate_blend_weight_flags(anim as *const Anim, channel as *const BlendChannel, time, flags) };
     result
 }
 
