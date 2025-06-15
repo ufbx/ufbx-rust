@@ -5471,6 +5471,38 @@ impl DomNode {
     pub fn find<'a>(&'a self, name: &str) -> Option<&'a DomNode> {
         dom_find(&self, name)
     }
+
+    pub fn is_array(&self) -> bool {
+        dom_is_array(&self)
+    }
+
+    pub fn array_size(&self) -> usize {
+        dom_array_size(&self)
+    }
+
+    pub fn as_int32_list<'a>(&'a self) -> &'a [i32] {
+        dom_as_int32_list(&self)
+    }
+
+    pub fn as_int64_list<'a>(&'a self) -> &'a [i64] {
+        dom_as_int64_list(&self)
+    }
+
+    pub fn as_float_list<'a>(&'a self) -> &'a [f32] {
+        dom_as_float_list(&self)
+    }
+
+    pub fn as_double_list<'a>(&'a self) -> &'a [f64] {
+        dom_as_double_list(&self)
+    }
+
+    pub fn as_real_list<'a>(&'a self) -> &'a [Real] {
+        dom_as_real_list(&self)
+    }
+
+    pub fn as_blob_list<'a>(&'a self) -> &'a [Blob] {
+        dom_as_blob_list(&self)
+    }
 }
 
 impl Props {
