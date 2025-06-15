@@ -21,7 +21,7 @@ pub type OpenFileContext = usize;
 
 #[repr(C)]
 pub struct List<T> {
-    data: *const T,
+    pub data: *const T,
     pub count: usize,
     _marker: PhantomData<T>,
 }
@@ -35,20 +35,20 @@ impl<T> List<T> {
         }
     }
     pub(crate) unsafe fn as_static_ref(&self) -> &'static [T] {
-        slice::from_raw_parts(self.data, self.count)
+        slice_from_ptr(self.data, self.count)
     }
 }
 
 impl<T> AsRef<[T]> for List<T> {
     fn as_ref(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.data, self.count) }
+        unsafe { slice_from_ptr(self.data, self.count) }
     }
 }
 
 impl<T> Deref for List<T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
-        unsafe { slice::from_raw_parts(self.data, self.count) }
+        unsafe { slice_from_ptr(self.data, self.count) }
     }
 }
 
@@ -77,20 +77,20 @@ pub struct RefList<T> {
 impl<T> RefList<T> {
     #[allow(dead_code)]
     pub(crate) unsafe fn as_static_ref(&self) -> &'static [Ref<T>] {
-        slice::from_raw_parts(self.data, self.count)
+        slice_from_ptr(self.data, self.count)
     }
 }
 
 impl<T> AsRef<[Ref<T>]> for RefList<T> {
     fn as_ref(&self) -> &[Ref<T>] {
-        unsafe { slice::from_raw_parts(self.data, self.count) }
+        unsafe { slice_from_ptr(self.data, self.count) }
     }
 }
 
 impl<T> Deref for RefList<T> {
     type Target = [Ref<T>];
     fn deref(&self) -> &Self::Target {
-        unsafe { slice::from_raw_parts(self.data, self.count) }
+        unsafe { slice_from_ptr(self.data, self.count) }
     }
 }
 
@@ -227,13 +227,13 @@ pub struct String {
 
 impl String {
     pub(crate) unsafe fn as_static_ref(&self) -> &'static str {
-        str::from_utf8_unchecked(slice::from_raw_parts(self.data, self.length))
+        str::from_utf8_unchecked(slice_from_ptr(self.data, self.length))
     }
 }
 
 impl AsRef<str> for String {
     fn as_ref(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(slice::from_raw_parts(self.data, self.length)) }
+        unsafe { str::from_utf8_unchecked(slice_from_ptr(self.data, self.length)) }
     }
 }
 
@@ -275,10 +275,26 @@ pub struct Blob {
     _marker: PhantomData<u8>,
 }
 
+unsafe fn slice_from_ptr<'a, T>(data: *const T, len: usize) -> &'a [T] {
+    if len > 0 {
+        slice::from_raw_parts(data, len)
+    } else {
+        &[]
+    }
+}
+
+unsafe fn slice_from_ptr_mut<'a, T>(data: *mut T, len: usize) -> &'a mut [T] {
+    if len > 0 {
+        slice::from_raw_parts_mut(data, len)
+    } else {
+        &mut []
+    }
+}
+
 impl Deref for Blob {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
-        unsafe { slice::from_raw_parts(self.data, self.size) }
+        unsafe { slice_from_ptr(self.data, self.size) }
     }
 }
 
@@ -505,7 +521,7 @@ impl<'a> FromRust for [VertexStream<'a>] {
 
 unsafe extern "C" fn stream_read_read(user: *mut c_void, buf: *mut c_void, size: usize) -> usize {
     let imp = &mut *(user as *mut Box<dyn Read>);
-    imp.read(slice::from_raw_parts_mut(buf as *mut u8, size)).unwrap_or(usize::MAX)
+    imp.read(slice_from_ptr_mut(buf as *mut u8, size)).unwrap_or(usize::MAX)
 }
 
 unsafe extern "C" fn stream_read_close(user: *mut c_void) {
@@ -514,7 +530,7 @@ unsafe extern "C" fn stream_read_close(user: *mut c_void) {
 
 unsafe extern "C" fn stream_imp_read(user: *mut c_void, buf: *mut c_void, size: usize) -> usize {
     let imp = &mut *(user as *mut Box<dyn StreamInterface>);
-    imp.read(slice::from_raw_parts_mut(buf as *mut u8, size)).unwrap_or(usize::MAX)
+    imp.read(slice_from_ptr_mut(buf as *mut u8, size)).unwrap_or(usize::MAX)
 }
 
 unsafe extern "C" fn stream_imp_skip(user: *mut c_void, size: usize) -> bool {
@@ -610,7 +626,7 @@ pub unsafe extern "C" fn call_open_file_cb<F>(user: *mut c_void, dst: *mut RawSt
 {
     let func: &mut F = &mut *(user as *mut F);
 
-    let path_str = match str::from_utf8(slice::from_raw_parts(path, path_len)) {
+    let path_str = match str::from_utf8(slice_from_ptr(path, path_len)) {
         Ok(path_str) => path_str,
         Err(_) => return false,
     };
