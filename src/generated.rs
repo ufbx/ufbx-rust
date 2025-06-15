@@ -102,12 +102,12 @@ pub struct VoidList {
 pub enum DomValueType {
     Number = 0,
     String = 1,
-    ArrayI8 = 2,
+    Blob = 2,
     ArrayI32 = 3,
     ArrayI64 = 4,
     ArrayF32 = 5,
     ArrayF64 = 6,
-    ArrayRawString = 7,
+    ArrayBlob = 7,
     ArrayIgnored = 8,
 }
 
@@ -1075,6 +1075,7 @@ pub struct BlendShape {
     pub offset_vertices: List<u32>,
     pub position_offsets: List<Vec3>,
     pub normal_offsets: List<Vec3>,
+    pub offset_weights: List<Real>,
 }
 
 #[repr(u32)]
@@ -2034,6 +2035,45 @@ impl Default for SpaceConversion {
     fn default() -> Self { Self::TransformRoot }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GeometryTransformHandling {
+    Preserve = 0,
+    HelperNodes = 1,
+    ModifyGeometry = 2,
+    ModifyGeometryNoFallback = 3,
+}
+
+impl Default for GeometryTransformHandling {
+    fn default() -> Self { Self::Preserve }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InheritModeHandling {
+    Preserve = 0,
+    HelperNodes = 1,
+    Compensate = 2,
+    CompensateNoFallback = 3,
+    Ignore = 4,
+}
+
+impl Default for InheritModeHandling {
+    fn default() -> Self { Self::Preserve }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PivotHandling {
+    Retain = 0,
+    AdjustToPivot = 1,
+    AdjustToRotationPivot = 2,
+}
+
+impl Default for PivotHandling {
+    fn default() -> Self { Self::Retain }
+}
+
 #[repr(C)]
 pub struct Thumbnail {
     pub props: Props,
@@ -2083,6 +2123,10 @@ pub struct Metadata {
     pub original_file_path: String,
     pub raw_original_file_path: Blob,
     pub space_conversion: SpaceConversion,
+    pub geometry_transform_handling: GeometryTransformHandling,
+    pub inherit_mode_handling: InheritModeHandling,
+    pub pivot_handling: PivotHandling,
+    pub handedness_conversion_axis: MirrorAxis,
     pub root_rotation: Quat,
     pub root_scale: Real,
     pub mirror_axis: MirrorAxis,
@@ -2565,44 +2609,6 @@ impl Default for UnicodeErrorHandling {
     fn default() -> Self { Self::ReplacementCharacter }
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GeometryTransformHandling {
-    Preserve = 0,
-    HelperNodes = 1,
-    ModifyGeometry = 2,
-    ModifyGeometryNoFallback = 3,
-}
-
-impl Default for GeometryTransformHandling {
-    fn default() -> Self { Self::Preserve }
-}
-
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum InheritModeHandling {
-    Preserve = 0,
-    HelperNodes = 1,
-    Compensate = 2,
-    CompensateNoFallback = 3,
-    Ignore = 4,
-}
-
-impl Default for InheritModeHandling {
-    fn default() -> Self { Self::Preserve }
-}
-
-#[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PivotHandling {
-    Retain = 0,
-    AdjustToPivot = 1,
-}
-
-impl Default for PivotHandling {
-    fn default() -> Self { Self::Retain }
-}
-
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct BakedKeyFlags(u32);
@@ -2839,8 +2845,9 @@ pub struct RawLoadOpts {
     pub open_file_cb: RawOpenFileCb,
     pub geometry_transform_handling: GeometryTransformHandling,
     pub inherit_mode_handling: InheritModeHandling,
-    pub pivot_handling: PivotHandling,
     pub space_conversion: SpaceConversion,
+    pub pivot_handling: PivotHandling,
+    pub pivot_handling_retain_empties: bool,
     pub handedness_conversion_axis: MirrorAxis,
     pub handedness_conversion_retain_winding: bool,
     pub reverse_winding: bool,
@@ -3340,8 +3347,9 @@ pub struct LoadOpts<'a> {
     pub open_file_cb: OpenFileCb<'a>,
     pub geometry_transform_handling: GeometryTransformHandling,
     pub inherit_mode_handling: InheritModeHandling,
-    pub pivot_handling: PivotHandling,
     pub space_conversion: SpaceConversion,
+    pub pivot_handling: PivotHandling,
+    pub pivot_handling_retain_empties: bool,
     pub handedness_conversion_axis: MirrorAxis,
     pub handedness_conversion_retain_winding: bool,
     pub reverse_winding: bool,
@@ -3416,8 +3424,9 @@ impl<'a> FromRust for LoadOpts<'a> {
             open_file_cb: self.open_file_cb.from_rust(),
             geometry_transform_handling: self.geometry_transform_handling,
             inherit_mode_handling: self.inherit_mode_handling,
-            pivot_handling: self.pivot_handling,
             space_conversion: self.space_conversion,
+            pivot_handling: self.pivot_handling,
+            pivot_handling_retain_empties: self.pivot_handling_retain_empties,
             handedness_conversion_axis: self.handedness_conversion_axis,
             handedness_conversion_retain_winding: self.handedness_conversion_retain_winding,
             reverse_winding: self.reverse_winding,
@@ -3491,8 +3500,9 @@ impl<'a> FromRust for LoadOpts<'a> {
             open_file_cb: self.open_file_cb.from_rust_mut(),
             geometry_transform_handling: self.geometry_transform_handling,
             inherit_mode_handling: self.inherit_mode_handling,
-            pivot_handling: self.pivot_handling,
             space_conversion: self.space_conversion,
+            pivot_handling: self.pivot_handling,
+            pivot_handling_retain_empties: self.pivot_handling_retain_empties,
             handedness_conversion_axis: self.handedness_conversion_axis,
             handedness_conversion_retain_winding: self.handedness_conversion_retain_winding,
             reverse_winding: self.reverse_winding,
@@ -4140,6 +4150,14 @@ extern "C" {
     pub fn ufbx_as_audio_clip(element: *const Element) -> *mut AudioClip;
     pub fn ufbx_as_pose(element: *const Element) -> *mut Pose;
     pub fn ufbx_as_metadata_object(element: *const Element) -> *mut MetadataObject;
+    pub fn ufbx_dom_is_array(node: *const DomNode) -> bool;
+    pub fn ufbx_dom_array_size(node: *const DomNode) -> usize;
+    pub fn ufbx_dom_as_int32_list(node: *const DomNode) -> List<i32>;
+    pub fn ufbx_dom_as_int64_list(node: *const DomNode) -> List<i64>;
+    pub fn ufbx_dom_as_float_list(node: *const DomNode) -> List<f32>;
+    pub fn ufbx_dom_as_double_list(node: *const DomNode) -> List<f64>;
+    pub fn ufbx_dom_as_real_list(node: *const DomNode) -> List<Real>;
+    pub fn ufbx_dom_as_blob_list(node: *const DomNode) -> List<Blob>;
 }
 pub struct SceneRoot {
     scene: *mut Scene,
@@ -5371,6 +5389,46 @@ pub fn as_pose<'a>(element: &'a Element) -> Option<&'a Pose> {
 pub fn as_metadata_object<'a>(element: &'a Element) -> Option<&'a MetadataObject> {
     let result = unsafe { ufbx_as_metadata_object(element as *const Element) };
     if result.is_null() { None } else { unsafe { Some(&*result) } }
+}
+
+pub fn dom_is_array(node: &DomNode) -> bool {
+    let result = unsafe { ufbx_dom_is_array(node as *const DomNode) };
+    result
+}
+
+pub fn dom_array_size(node: &DomNode) -> usize {
+    let result = unsafe { ufbx_dom_array_size(node as *const DomNode) };
+    result
+}
+
+pub fn dom_as_int32_list<'a>(node: &DomNode) -> &'a [i32] {
+    let result = unsafe { ufbx_dom_as_int32_list(node as *const DomNode) };
+    unsafe { result.as_static_ref() }
+}
+
+pub fn dom_as_int64_list<'a>(node: &DomNode) -> &'a [i64] {
+    let result = unsafe { ufbx_dom_as_int64_list(node as *const DomNode) };
+    unsafe { result.as_static_ref() }
+}
+
+pub fn dom_as_float_list<'a>(node: &DomNode) -> &'a [f32] {
+    let result = unsafe { ufbx_dom_as_float_list(node as *const DomNode) };
+    unsafe { result.as_static_ref() }
+}
+
+pub fn dom_as_double_list<'a>(node: &DomNode) -> &'a [f64] {
+    let result = unsafe { ufbx_dom_as_double_list(node as *const DomNode) };
+    unsafe { result.as_static_ref() }
+}
+
+pub fn dom_as_real_list<'a>(node: &DomNode) -> &'a [Real] {
+    let result = unsafe { ufbx_dom_as_real_list(node as *const DomNode) };
+    unsafe { result.as_static_ref() }
+}
+
+pub fn dom_as_blob_list<'a>(node: &DomNode) -> &'a [Blob] {
+    let result = unsafe { ufbx_dom_as_blob_list(node as *const DomNode) };
+    unsafe { result.as_static_ref() }
 }
 pub fn identity_matrix() -> Matrix { unsafe { ufbx_identity_matrix } }
 pub fn identity_transform() -> Transform { unsafe { ufbx_identity_transform } }
