@@ -5746,7 +5746,7 @@ pub enum ElementData<'a> {
 }
 
 impl Element {
-    pub fn as_data(&self) -> ElementData {
+    pub fn as_data(&self) -> ElementData<'_> {
         unsafe {
             match self.type_ {
                 ElementType::Unknown => ElementData::Unknown(&*(self as *const _ as *const Unknown)),

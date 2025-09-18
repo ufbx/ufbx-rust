@@ -498,7 +498,7 @@ pub struct VertexStream<'a> {
 }
 
 impl VertexStream<'_> {
-    pub fn new<T: Copy + Sized>(data: &mut [T]) -> VertexStream {
+    pub fn new<T: Copy + Sized>(data: &mut [T]) -> VertexStream<'_> {
         return VertexStream {
             data: data.as_mut_ptr() as *mut c_void,
             vertex_count: data.len(),

@@ -1592,7 +1592,7 @@ def emit_element_data():
     emit()
     emit("impl Element {")
     indent()
-    emit("pub fn as_data(&self) -> ElementData {")
+    emit("pub fn as_data(&self) -> ElementData<'_> {")
     indent()
     emit("unsafe {")
     indent()
