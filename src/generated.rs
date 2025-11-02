@@ -520,7 +520,8 @@ pub struct ColorSet {
 #[derive(Default)]
 #[derive(Debug)]
 pub struct Edge {
-    pub indices: [u32; 2],
+    pub a: u32,
+    pub b: u32,
 }
 
 #[repr(C)]
@@ -1193,7 +1194,7 @@ pub struct MaterialMap {
     pub has_value: bool,
     pub texture_enabled: bool,
     pub feature_disabled: bool,
-    pub value_components: i32,
+    pub value_components: u32,
 }
 
 #[repr(C)]
@@ -2432,11 +2433,12 @@ impl Default for RawOpenFileCb {
 }
 
 #[repr(C)]
-pub struct OpenFileOpts {
-    _begin_zero: u32,
+#[derive(Default)]
+pub struct RawOpenFileOpts {
+    pub _begin_zero: u32,
     pub allocator: RawAllocatorOpts,
     pub filename_null_terminated: bool,
-    _end_zero: u32,
+    pub _end_zero: u32,
 }
 
 #[repr(C)]
@@ -3168,6 +3170,34 @@ impl OpenFileCb<'_> {
             OpenFileCb::Ref(f) => RawOpenFileCb::from_func(f),
             OpenFileCb::Mut(f) => RawOpenFileCb::from_func(f),
             OpenFileCb::Raw(raw) => raw.take(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct OpenFileOpts {
+    pub allocator: AllocatorOpts<>,
+    pub filename_null_terminated: Unsafe<bool>,
+}
+
+impl FromRust for OpenFileOpts {
+    type Result = RawOpenFileOpts;
+    #[allow(unused, unused_variables, dead_code)]
+    fn from_rust(&self, arena: &mut Arena) -> Self::Result {
+        RawOpenFileOpts {
+            _begin_zero: 0,
+            allocator: self.allocator.from_rust(arena),
+            filename_null_terminated: panic!("required mutable"),
+            _end_zero: 0,
+        }
+    }
+    #[allow(unused, unused_variables, dead_code)]
+    fn from_rust_mut(&mut self, arena: &mut Arena) -> Self::Result {
+        RawOpenFileOpts {
+            _begin_zero: 0,
+            allocator: self.allocator.from_rust_mut(arena),
+            filename_null_terminated: self.filename_null_terminated.take(),
+            _end_zero: 0,
         }
     }
 }
@@ -3998,8 +4028,8 @@ extern "C" {
     pub fn ufbx_get_compatible_matrix_for_normals(node: *const Node) -> Matrix;
     pub fn ufbx_inflate(dst: *mut c_void, dst_size: usize, input: *const InflateInput, retain: *mut InflateRetain) -> isize;
     pub fn ufbx_default_open_file(user: *mut c_void, stream: *mut RawStream, path: *const u8, path_len: usize, info: *const OpenFileInfo) -> bool;
-    pub fn ufbx_open_file(stream: *mut RawStream, path: *const u8, path_len: usize, opts: *const OpenFileOpts, error: *mut Error) -> bool;
-    pub fn ufbx_open_file_ctx(stream: *mut RawStream, ctx: OpenFileContext, path: *const u8, path_len: usize, opts: *const OpenFileOpts, error: *mut Error) -> bool;
+    pub fn ufbx_open_file(stream: *mut RawStream, path: *const u8, path_len: usize, opts: *const RawOpenFileOpts, error: *mut Error) -> bool;
+    pub fn ufbx_open_file_ctx(stream: *mut RawStream, ctx: OpenFileContext, path: *const u8, path_len: usize, opts: *const RawOpenFileOpts, error: *mut Error) -> bool;
     pub fn ufbx_open_memory(stream: *mut RawStream, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_open_memory_ctx(stream: *mut RawStream, ctx: OpenFileContext, data: *const c_void, data_size: usize, opts: *const RawOpenMemoryOpts, error: *mut Error) -> bool;
     pub fn ufbx_evaluate_curve(curve: *const AnimCurve, time: f64, default_value: Real) -> Real;
@@ -4010,7 +4040,7 @@ extern "C" {
     pub fn ufbx_evaluate_anim_value_vec3_flags(anim_value: *const AnimValue, time: f64, flags: u32) -> Vec3;
     pub fn ufbx_evaluate_prop_len(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64) -> Prop;
     pub fn ufbx_evaluate_prop(anim: *const Anim, element: *const Element, name: *const u8, time: f64) -> Prop;
-    pub fn ufbx_evaluate_prop_len_flags(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64, flags: u32) -> Prop;
+    pub fn ufbx_evaluate_prop_flags_len(anim: *const Anim, element: *const Element, name: *const u8, name_len: usize, time: f64, flags: u32) -> Prop;
     pub fn ufbx_evaluate_prop_flags(anim: *const Anim, element: *const Element, name: *const u8, time: f64, flags: u32) -> Prop;
     pub fn ufbx_evaluate_props(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize) -> Props;
     pub fn ufbx_evaluate_props_flags(anim: *const Anim, element: *const Element, time: f64, buffer: *mut Prop, buffer_size: usize, flags: u32) -> Props;
@@ -4569,18 +4599,18 @@ pub unsafe fn default_open_file_raw(user: *mut c_void, stream: &mut RawStream, p
     result
 }
 
-pub unsafe fn open_file_raw(stream: &mut RawStream, path: &str, opts: &OpenFileOpts) -> Result<bool> {
+pub unsafe fn open_file_raw(stream: &mut RawStream, path: &str, opts: &RawOpenFileOpts) -> Result<bool> {
     let mut error: Error = Error::default();
-    let result = { ufbx_open_file(stream as *mut RawStream, path.as_ptr(), path.len(), opts as *const OpenFileOpts, &mut error) };
+    let result = { ufbx_open_file(stream as *mut RawStream, path.as_ptr(), path.len(), opts as *const RawOpenFileOpts, &mut error) };
     if error.type_ != ErrorType::None {
         return Err(error)
     }
     Ok(result)
 }
 
-pub unsafe fn open_file_ctx_raw(stream: &mut RawStream, ctx: OpenFileContext, path: &str, opts: &OpenFileOpts) -> Result<bool> {
+pub unsafe fn open_file_ctx_raw(stream: &mut RawStream, ctx: OpenFileContext, path: &str, opts: &RawOpenFileOpts) -> Result<bool> {
     let mut error: Error = Error::default();
-    let result = { ufbx_open_file_ctx(stream as *mut RawStream, ctx, path.as_ptr(), path.len(), opts as *const OpenFileOpts, &mut error) };
+    let result = { ufbx_open_file_ctx(stream as *mut RawStream, ctx, path.as_ptr(), path.len(), opts as *const RawOpenFileOpts, &mut error) };
     if error.type_ != ErrorType::None {
         return Err(error)
     }
@@ -4642,13 +4672,8 @@ pub fn evaluate_prop<'a, 'b>(anim: &'a Anim, element: &'a Element, name: &'b str
     unsafe { ExternalRef::new(result) }
 }
 
-pub fn evaluate_prop_len_flags(anim: &Anim, element: &Element, name: &str, time: f64, flags: u32) -> Prop {
-    let result = unsafe { ufbx_evaluate_prop_len_flags(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time, flags) };
-    result
-}
-
-pub fn evaluate_prop_flags(anim: &Anim, element: &Element, name: &u8, time: f64, flags: u32) -> Prop {
-    let result = unsafe { ufbx_evaluate_prop_flags(anim as *const Anim, element as *const Element, name as *const u8, time, flags) };
+pub fn evaluate_prop_flags(anim: &Anim, element: &Element, name: &str, time: f64, flags: u32) -> Prop {
+    let result = unsafe { ufbx_evaluate_prop_flags_len(anim as *const Anim, element as *const Element, name.as_ptr(), name.len(), time, flags) };
     result
 }
 
