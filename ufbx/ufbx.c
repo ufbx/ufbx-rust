@@ -542,7 +542,8 @@ extern "C" {
 		#pragma GCC diagnostic ignored "-Wfloat-conversion"
 	#endif
 	// `-Warray-bounds` results in warnings if UBsan is enabled and pre-GCC-14 has no way of detecting it..
-	#if UFBXI_GNUC_VERSION >= ufbx_pack_version(4, 3, 0) && UFBXI_GNUC_VERSION < ufbx_pack_version(14, 0, 0)
+	// The workaround for this uses an assert, but if the user has both UBsan and asserts disabled we need to silence the warning.
+	#if (UFBXI_GNUC_VERSION >= ufbx_pack_version(4, 3, 0) && UFBXI_GNUC_VERSION < ufbx_pack_version(14, 0, 0)) || defined(NDEBUG)
 		#pragma GCC diagnostic ignored "-Warray-bounds"
 	#endif
 #endif
@@ -873,7 +874,7 @@ enum { UFBX_MAXIMUM_ALIGNMENT = sizeof(void*) > 8 ? sizeof(void*) : 8 };
 
 // -- Version
 
-#define UFBX_SOURCE_VERSION ufbx_pack_version(0, 21, 1)
+#define UFBX_SOURCE_VERSION ufbx_pack_version(0, 21, 4)
 ufbx_abi_data_def const uint32_t ufbx_source_version = UFBX_SOURCE_VERSION;
 
 ufbx_static_assert(source_header_version, UFBX_SOURCE_VERSION/1000u == UFBX_HEADER_VERSION/1000u);
@@ -1081,7 +1082,7 @@ ufbx_static_assert(source_header_version, UFBX_SOURCE_VERSION/1000u == UFBX_HEAD
 // -- Utility
 
 #if defined(UFBX_UBSAN)
-	static void ufbxi_assert_zero(size_t offset) { ufbx_assert(offset == 0); }
+	static void ufbxi_assert_zero(size_t offset) { (void)offset; ufbx_assert(offset == 0); }
 	#define ufbxi_add_ptr(ptr, offset) ((ptr) ? (ptr) + (offset) : (ufbxi_assert_zero((size_t)(offset)), (ptr)))
 	#define ufbxi_sub_ptr(ptr, offset) ((ptr) ? (ptr) - (offset) : (ufbxi_assert_zero((size_t)(offset)), (ptr)))
 #else
@@ -19391,6 +19392,7 @@ static const ufbxi_shader_mapping ufbxi_obj_fbx_mapping[] = {
 	{ UFBX_MATERIAL_FBX_NORMAL_MAP, 0, 0, ufbxi_mat_string("norm") },
 	{ UFBX_MATERIAL_FBX_DISPLACEMENT, 0, 0, ufbxi_mat_string("disp") },
 	{ UFBX_MATERIAL_FBX_BUMP, 0, 0, ufbxi_mat_string("bump") },
+	{ UFBX_MATERIAL_FBX_BUMP, 0, 0, ufbxi_mat_string("Bump") },
 };
 
 static const ufbxi_shader_mapping ufbxi_fbx_lambert_shader_pbr_mapping[] = {
@@ -19736,6 +19738,7 @@ static const ufbxi_shader_mapping ufbxi_obj_pbr_mapping[] = {
 	{ UFBX_MATERIAL_PBR_TRANSMISSION_COLOR, UFBXI_SHADER_MAPPING_DEFAULT_W_1|UFBXI_SHADER_MAPPING_WIDEN_TO_RGB, 0, ufbxi_mat_string("Tf") },
 	{ UFBX_MATERIAL_PBR_DISPLACEMENT_MAP, 0, 0, ufbxi_mat_string("disp") },
 	{ UFBX_MATERIAL_PBR_NORMAL_MAP, 0, 0, ufbxi_mat_string("bump") },
+	{ UFBX_MATERIAL_PBR_NORMAL_MAP, 0, 0, ufbxi_mat_string("Bump") },
 	{ UFBX_MATERIAL_PBR_NORMAL_MAP, 0, 0, ufbxi_mat_string("norm") },
 	{ UFBX_MATERIAL_PBR_SHEEN_COLOR, UFBXI_SHADER_MAPPING_DEFAULT_W_1|UFBXI_SHADER_MAPPING_WIDEN_TO_RGB, 0, ufbxi_mat_string("Ps") },
 	{ UFBX_MATERIAL_PBR_COAT_FACTOR, 0, 0, ufbxi_mat_string("Pc") },
@@ -27074,7 +27077,7 @@ ufbxi_nodiscard static ufbxi_noinline int ufbxi_bake_postprocess_quat(ufbxi_bake
 	ufbx_quat ref = src.data[0].value;
 	for (size_t i = 1; i < src.count; i++) {
 		ufbx_quat v = src.data[i].value;
-		if (v.x != ref.x || v.y != ref.y || v.z != ref.z || v.y != ref.w) {
+		if (v.x != ref.x || v.y != ref.y || v.z != ref.z || v.w != ref.w) {
 			constant = false;
 			break;
 		}
