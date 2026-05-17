@@ -1954,6 +1954,7 @@ pub enum Exporter {
     BlenderBinary = 2,
     BlenderAscii = 3,
     MotionBuilder = 4,
+    UfbxWrite = 5,
 }
 
 impl Default for Exporter {
