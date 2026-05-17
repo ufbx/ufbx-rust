@@ -8,7 +8,7 @@
         {
             "name": "ufbx",
             "url": "https://github.com/ufbx/ufbx",
-            "branch": "integration",
+            "branch": "publish-setup",
             "files": [
                 {
                     "root": "ufbx",
@@ -18,6 +18,11 @@
                     "root": "bindgen",
                     "remoteRoot": "bindgen",
                     "files": ["parsette.py", "ufbx_parser.py", "ufbx_ir.py"]
+                },
+                {
+                    "root": "misc",
+                    "remoteRoot": "misc",
+                    "files": ["changelog.md"]
                 }
             ]
         }
