@@ -413,6 +413,7 @@ pub struct Node {
     pub visible: bool,
     pub is_root: bool,
     pub has_geometry_transform: bool,
+    pub use_rotation_space: bool,
     pub has_adjust_transform: bool,
     pub has_root_adjust_transform: bool,
     pub is_geometry_transform_helper: bool,
