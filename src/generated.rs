@@ -1195,7 +1195,7 @@ pub struct MaterialMap {
     pub has_value: bool,
     pub texture_enabled: bool,
     pub feature_disabled: bool,
-    pub value_components: u32,
+    pub value_components: u8,
 }
 
 #[repr(C)]

@@ -272,8 +272,8 @@ callback_signatures = {
 primitive_types = {
     "void": "c_void",
     "char": "u8",
-    "int8_t": "i32",
-    "uint8_t": "u32",
+    "int8_t": "i8",
+    "uint8_t": "u8",
     "int32_t": "i32",
     "uint32_t": "u32",
     "int64_t": "i64",
